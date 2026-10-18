@@ -1,7 +1,8 @@
+import { platformInfo } from './platforms';
 import { readToken } from './storage';
 import type {
   AccountUser, AuthStatus, Capabilities, FavoriteItem, GeneratedLink, HistoryItem,
-  Paged, Platform, PlayerPlaylist, PlaylistSummary, QualityId, ResolvedSource, TopSong,
+  Paged, Platform, PlayerPlaylist, PlaylistSummary, QualityId, ResolvedSource, SiteStats, TopSong,
 } from './types';
 
 export class ApiError extends Error {
@@ -23,14 +24,29 @@ interface RequestOptions {
   signal?: AbortSignal;
 }
 
+/** 路径前缀与鉴权头都来自平台注册表，新增平台不需要改这里。 */
+const PLATFORM_PREFIX: Record<Platform, string> = {
+  netease: '/api',
+  qq: '/api/qq',
+  kugou: '/api/kugou',
+  kuwo: '/api/kuwo',
+};
+
+const TOKEN_HEADER: Record<Platform, string> = {
+  netease: 'x-token',
+  qq: 'x-qq-token',
+  kugou: 'x-kugou-token',
+  kuwo: 'x-kuwo-token',
+};
+
 export function apiPath(platform: Platform, path: string): string {
-  return platform === 'qq' ? `/api/qq${path}` : `/api${path}`;
+  return `${PLATFORM_PREFIX[platform] ?? PLATFORM_PREFIX.netease}${path}`;
 }
 
 async function request<T>(path: string, platform: Platform, options: RequestOptions = {}): Promise<T> {
   const headers: Record<string, string> = {};
   const token = options.token ?? readToken(platform);
-  if (token) headers[platform === 'qq' ? 'x-qq-token' : 'x-token'] = token;
+  if (token) headers[TOKEN_HEADER[platform] ?? TOKEN_HEADER.netease] = token;
   const init: RequestInit = { method: options.method ?? 'GET', headers, cache: 'no-store' };
   if (options.signal) init.signal = options.signal;
   if (options.body !== undefined) {
@@ -143,6 +159,9 @@ export const api = {
     return request<{ data: Capabilities }>('/api/player/capabilities', 'netease')
       .then(result => result.data);
   },
+  stats(): Promise<SiteStats> {
+    return request<{ data: SiteStats }>('/api/stats', 'netease').then(result => result.data);
+  },
   playerPlaylist(platform: Platform, playlistId: string, grant = ''): Promise<PlayerPlaylist> {
     return request<{ data: PlayerPlaylist }>(
       `/api/player/playlist${query({ platform, id: playlistId, grant })}`, platform, { token: grant || undefined },
@@ -162,19 +181,17 @@ export const api = {
 
 // 歌单播放地址可以直接交给 hls.js / <audio>，因此不走 fetch 包装
 export function streamUrl(platform: Platform, playlistId: string, grant: string): string {
-  const prefix = platform === 'qq' ? '/api/qq/playlist' : '/api/playlist';
-  return `${prefix}/m3u8/${encodeURIComponent(grant)}/${playlistId}/stream.m3u8`;
+  return `${PLATFORM_PREFIX[platform] ?? PLATFORM_PREFIX.netease}/playlist/m3u8/${encodeURIComponent(grant)}/${playlistId}/stream.m3u8`;
 }
 
 // 本站生成的 M3U8 链接可以反解出歌单与播放令牌，用于预览页粘贴
 export function parseStreamUrl(value: string): { platform: Platform; playlistId: string; grant: string } | null {
   let url: URL;
   try { url = new URL(value); } catch { return null; }
-  const match = url.pathname.match(/^\/api\/(qq\/)?playlist\/m3u8\/([^/]+)\/(\d{1,20})\/stream\.m3u8$/);
+  const match = url.pathname.match(/^\/api\/(qq|kugou|kuwo)?\/?playlist\/m3u8\/([^/]+)\/(\d{1,20})\/stream\.m3u8$/);
   if (!match) return null;
-  return {
-    platform: match[1] ? 'qq' : 'netease',
-    grant: decodeURIComponent(match[2]),
-    playlistId: match[3],
-  };
+  const platform = (match[1] ?? 'netease') as Platform;
+  return { platform, grant: decodeURIComponent(match[2]), playlistId: match[3] };
 }
+
+export { platformInfo };

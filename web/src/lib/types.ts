@@ -1,16 +1,39 @@
-export type Platform = 'netease' | 'qq';
+export type Platform = 'netease' | 'qq' | 'kugou' | 'kuwo';
 export type QualityId = 'low' | 'medium' | 'high' | 'lossless';
+export type ThemeName = 'light' | 'dark' | 'system';
 
 export interface AccountUser {
   userId: string;
   nickname: string;
   avatar: string;
   vipType: number;
+  platform?: Platform;
 }
 
 export interface AuthStatus {
   logged: boolean;
   user?: AccountUser;
+  /** 游客平台会带上 supported:false 与原因，用于「我的音乐」的空状态文案 */
+  supported?: boolean;
+  message?: string;
+}
+
+export interface PlatformCapability {
+  id: Platform;
+  account: boolean;
+  library: boolean;
+  playback: boolean;
+}
+
+export interface SiteStats {
+  parsedSongs: number;
+  generatedLinks: number;
+  plays: number;
+  playDurationMs: number;
+  listeners: number;
+  songs: number;
+  playlists: number;
+  updatedAt: number;
 }
 
 export interface PlaylistSummary {
@@ -73,6 +96,8 @@ export interface Capabilities {
   defaultQuality: QualityId;
   privateCache: boolean;
   degraded?: 'normal' | 'links-only' | 'shed';
+  /** 后端注册表下发的平台能力，前端只用来做兜底校验 */
+  platforms?: PlatformCapability[];
   qualities: QualityOption[];
 }
 

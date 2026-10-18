@@ -3,23 +3,33 @@
 const PLAY_EVENT_SAMPLE = 1;
 const REQUEST_TELEMETRY_SAMPLE_DEFAULT = 10;
 
+// 平台前缀集中在这里，新增平台时改一处即可。顺序无关，因为都是锚定的完整前缀。
+const PLATFORM_PREFIX = '(?:qq|kugou|kuwo)?\\/?';
+
 const ROUTE_PATTERNS = [
   [/^\/api\/health$/, 'health'],
+  [/^\/api\/stats$/, 'stats'],
   [/^\/api\/player\/capabilities$/, 'player.capabilities'],
   [/^\/api\/player\/playlist$/, 'player.playlist'],
   [/^\/api\/player\/resolve\//, 'player.resolve'],
   [/^\/api\/player\/media\//, 'player.media'],
   [/^\/api\/player\/cover\//, 'player.cover'],
-  [/^\/api\/(?:qq\/)?playlist\/m3u8\//, 'playlist.stream'],
-  [/^\/api\/(?:qq\/)?song\//, 'song.segment'],
-  [/^\/api\/(?:qq\/)?playlist\/parse$/, 'playlist.parse'],
-  [/^\/api\/(?:qq\/)?playlist\/url$/, 'playlist.url'],
-  [/^\/api\/(?:qq\/)?playlist\/generate$/, 'playlist.generate'],
-  [/^\/api\/(?:qq\/)?playlist\/user$/, 'playlist.user'],
-  [/^\/api\/(?:qq\/)?auth\//, 'auth'],
-  [/^\/api\/(?:qq\/)?favorites/, 'favorites'],
-  [/^\/api\/(?:qq\/)?history\//, 'history'],
+  [new RegExp(`^/api/${PLATFORM_PREFIX}playlist/m3u8/`), 'playlist.stream'],
+  [new RegExp(`^/api/${PLATFORM_PREFIX}song/`), 'song.segment'],
+  [new RegExp(`^/api/${PLATFORM_PREFIX}playlist/parse$`), 'playlist.parse'],
+  [new RegExp(`^/api/${PLATFORM_PREFIX}playlist/url$`), 'playlist.url'],
+  [new RegExp(`^/api/${PLATFORM_PREFIX}playlist/generate$`), 'playlist.generate'],
+  [new RegExp(`^/api/${PLATFORM_PREFIX}playlist/user$`), 'playlist.user'],
+  [new RegExp(`^/api/${PLATFORM_PREFIX}auth/`), 'auth'],
+  [new RegExp(`^/api/${PLATFORM_PREFIX}favorites`), 'favorites'],
+  [new RegExp(`^/api/${PLATFORM_PREFIX}history/`), 'history'],
 ];
+
+// 从路径里取平台标识，用于遥测的 blob 维度
+function platformOfPath(pathname) {
+  const match = pathname.match(/^\/api\/(qq|kugou|kuwo)(?:\/|$)/);
+  return match ? match[1] : 'netease';
+}
 
 // 媒体与分片请求已经由播放事件覆盖，再记一次会让遥测先于请求数撞上每日 10 万点上限
 const PLAYBACK_ROUTE_KEYS = new Set(['song.segment', 'player.media']);
@@ -83,7 +93,7 @@ function recordRequestEvent(env, request, url, status, durationMs) {
   return emit(env.ANALYTICS_REQUESTS, {
     indexes: [key],
     blobs: [
-      'req', key, truncate(request.method, 8), truncate(url.pathname.startsWith('/api/qq/') ? 'qq' : 'netease', 8),
+      'req', key, truncate(request.method, 8), truncate(platformOfPath(url.pathname), 8),
       truncate(request.cf?.colo, 8), truncate(env.DEGRADE_MODE, 16),
     ],
     doubles: [Number(status) || 0, Number(durationMs) || 0, sample, Date.now()],
@@ -92,5 +102,5 @@ function recordRequestEvent(env, request, url, status, durationMs) {
 
 export {
   PLAY_EVENT_SAMPLE, REQUEST_TELEMETRY_SAMPLE_DEFAULT,
-  recordPlayEvent, recordRequestEvent, routeKey, telemetrySample,
+  platformOfPath, recordPlayEvent, recordRequestEvent, routeKey, telemetrySample,
 };

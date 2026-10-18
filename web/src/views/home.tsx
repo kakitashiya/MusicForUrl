@@ -4,6 +4,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Copy, Heart, Library, Link2, MonitorPlay } from 'lucide-react';
 import { api } from '@/lib/api';
+import { PLAYBACK_PLATFORMS, isPlatform, platformInfo, platformLabel } from '@/lib/platforms';
 import { readGeneratorPlatform, writeGeneratorPlatform } from '@/lib/storage';
 import type { GeneratedLink, Platform } from '@/lib/types';
 
@@ -16,6 +17,8 @@ import { usePlayer } from '@/stores/player';
 import { useUi } from '@/stores/ui';
 
 function RecentGrid({ platform }: { platform: Platform }) {
+  const info = platformInfo(platform);
+  // 游客平台没有播放记录可言，这里直接换成能力说明，而不是给一个永远为空的列表
   const loggedIn = useAuth(state => !!state.users[platform]);
   const openLogin = useUi(state => state.openLogin);
   const openPlaylist = usePlayer(state => state.open);
@@ -24,13 +27,26 @@ function RecentGrid({ platform }: { platform: Platform }) {
   const { data, isLoading } = useQuery({
     queryKey: ['recent', platform, 'home'],
     queryFn: () => api.recent(platform, 0, 6),
-    enabled: loggedIn,
+    enabled: loggedIn && info.library,
     staleTime: 60_000,
   });
 
   async function play(playlistId: string) {
     await openPlaylist(platform, playlistId);
     navigate('/preview');
+  }
+
+  if (!info.library) {
+    return (
+      <section>
+        <div className="mb-3.5 flex items-baseline justify-between">
+          <h2 className="text-base font-semibold">关于{info.short}</h2>
+        </div>
+        <div className="rounded-xl border border-dashed border-border px-5 py-6 text-[13px] text-muted-foreground">
+          {info.note} 该平台没有账号体系，因此没有个人歌单、收藏与播放记录。
+        </div>
+      </section>
+    );
   }
 
   return (
@@ -83,7 +99,9 @@ export function HomeView() {
   const users = useAuth(state => state.users);
   const openLogin = useUi(state => state.openLogin);
   const openPlaylist = usePlayer(state => state.open);
-  const loggedIn = !!users[platform];
+  const info = platformInfo(platform);
+  // 游客平台不需要登录就能生成链接
+  const loggedIn = !info.account || !!users[platform];
 
   function switchPlatform(next: Platform) {
     setPlatform(next);
@@ -98,7 +116,10 @@ export function HomeView() {
     try {
       const data = await api.generate(target, raw.trim());
       setResult(data);
-      setFavorited(await api.favoriteCheck(target, data.playlist?.id ?? '').catch(() => false));
+      // 游客平台没有收藏，跳过这次请求
+      setFavorited(platformInfo(target).library
+        ? await api.favoriteCheck(target, data.playlist?.id ?? '').catch(() => false)
+        : false);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '生成失败');
     } finally {
@@ -110,11 +131,13 @@ export function HomeView() {
   React.useEffect(() => {
     const id = params.get('play');
     if (!id) return;
-    const target: Platform = params.get('platform') === 'qq' ? 'qq' : 'netease';
+    const requested = params.get('platform');
+    const target: Platform = isPlatform(requested) ? requested : 'netease';
     setPlatform(target);
     writeGeneratorPlatform(target);
     setInput(id);
-    if (useAuth.getState().tokens[target]) void generate(id, target);
+    const needsLogin = platformInfo(target).account && !useAuth.getState().tokens[target];
+    if (!needsLogin) void generate(id, target);
   }, [params, generate]);
 
   async function toggleFavorite() {
@@ -168,7 +191,7 @@ export function HomeView() {
         <div className="relative">
           <h1 className="text-[27px] font-semibold leading-tight tracking-tight">把歌单变成播放链接</h1>
           <p className="mt-2 text-[13.5px] text-[var(--hero-muted)]">
-            粘贴网易云或 QQ 音乐歌单，生成可直接在 VRChat 与播放器中使用的 M3U8。
+            粘贴歌单链接，生成可直接在 VRChat 与播放器中使用的 M3U8。支持网易云、QQ 音乐、酷狗与酷我。
           </p>
 
           <Segmented
@@ -177,10 +200,7 @@ export function HomeView() {
             className="mt-5"
             value={platform}
             onChange={switchPlatform}
-            options={[
-              { value: 'netease', label: '网易云音乐' },
-              { value: 'qq', label: 'QQ 音乐' },
-            ]}
+            options={PLAYBACK_PLATFORMS.map(item => ({ value: item.id, label: item.short }))}
           />
 
           <form
@@ -196,7 +216,7 @@ export function HomeView() {
               <input
                 value={input}
                 onChange={event => setInput(event.target.value)}
-                placeholder="粘贴歌单链接或 ID"
+                placeholder={`粘贴${info.short}歌单链接或 ID`}
                 aria-label="歌单链接或 ID"
                 autoComplete="off"
                 spellCheck={false}
@@ -212,9 +232,9 @@ export function HomeView() {
             </button>
           </form>
 
-          {!loggedIn && (
+          {!loggedIn ? (
             <p className="mt-3 text-[12.5px] text-[var(--hero-muted)]">
-              需要先登录{platform === 'qq' ? 'QQ 音乐' : '网易云音乐'}账号。
+              需要先登录{platformLabel(platform)}账号。
               <button
                 type="button"
                 onClick={() => openLogin(platform)}
@@ -223,6 +243,8 @@ export function HomeView() {
                 立即登录
               </button>
             </p>
+          ) : (
+            <p className="mt-3 text-[12.5px] text-[var(--hero-muted)]">{info.note}</p>
           )}
         </div>
       </section>
@@ -237,7 +259,8 @@ export function HomeView() {
           <div className="min-w-0 flex-1">
             <p className="truncate text-[15.5px] font-semibold">{result.playlist.name}</p>
             <p className="mt-0.5 text-[12.5px] text-muted-foreground">
-              {result.playlist.songCount ?? result.playlist.trackCount ?? 0} 首 · 链接有效期 24 小时 · 退出登录会立即撤销
+              {platformLabel(platform)} · {result.playlist.songCount ?? result.playlist.trackCount ?? 0} 首 ·
+              {info.account ? ' 链接有效期 24 小时 · 退出登录会立即撤销' : ' 链接有效期 24 小时'}
             </p>
             <div className="mt-2.5 flex items-center gap-2.5 rounded-lg border border-border bg-muted/50 px-3 py-2">
               <code className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-muted-foreground">{result.url}</code>
@@ -254,10 +277,12 @@ export function HomeView() {
           <div className="flex shrink-0 flex-wrap gap-2">
             <Button onClick={copyLink}><Copy />复制</Button>
             <Button variant="outline" onClick={() => void preview()}><MonitorPlay />预览</Button>
-            <Button variant="outline" onClick={() => void toggleFavorite()}>
-              <Heart className={favorited ? 'fill-current' : undefined} />
-              {favorited ? '已收藏' : '收藏'}
-            </Button>
+            {info.library && (
+              <Button variant="outline" onClick={() => void toggleFavorite()}>
+                <Heart className={favorited ? 'fill-current' : undefined} />
+                {favorited ? '已收藏' : '收藏'}
+              </Button>
+            )}
           </div>
         </section>
       )}

@@ -2,9 +2,9 @@ import playerApi from '../../lib/player-api.js';
 import policy from '../../lib/player-policy.js';
 import cache from '../../lib/player-cache.js';
 import qqmusic from '../../lib/qqmusic.js';
-import * as netease from './netease.js';
 import { createPlaybackToken, decryptCookie, getPlaybackUser, getSessionUser, sha256Hex } from './security.js';
-import { getPlaylist } from './playlists.js';
+import { adapter, getPlaylist } from './playlists.js';
+import { PLATFORMS, PLATFORM_IDS, guestUser } from './platforms.js';
 import { recordPlayback } from './playback-history.js';
 import { recordPlayEvent } from './telemetry.js';
 import { degradeMode } from './degrade.js';
@@ -96,10 +96,13 @@ async function resolvePlayerSource(env, user, songId, quality, fresh = false, ct
     if (resolving.has(key)) return resolving.get(key);
   }
   const promise = (async () => {
-    const cookie = await decryptCookie(env, user);
+    // 游客平台没有 Cookie，适配器只会用到公开接口
+    const cookie = user.guest ? '' : await decryptCookie(env, user);
+    const upstream = adapter(user.platform);
     const source = await policy.resolveQuality(
-      candidate => user.platform === 'qq' ? qqmusic.getSongResource(songId, cookie, candidate, 1)
-        : netease.getSongResource(songId, cookie, { ...env, MUSIC_QUALITY: candidate }),
+      candidate => user.platform === 'qq'
+        ? qqmusic.getSongResource(songId, cookie, candidate, 1)
+        : upstream.getSongResource(songId, cookie, { ...env, MUSIC_QUALITY: candidate }),
       quality, true,
     );
     source.url = policy.allowedSource(source.url, user.platform);
@@ -120,11 +123,26 @@ function fillRate(env) {
   return Number.isFinite(value) && value >= 0 && value <= 1 ? value : 1;
 }
 
+// 音频缓存的身份标识描述的是「这段字节是什么」，而不是「它从哪来」。
+//
+// 网易云与 QQ 的直链路径是稳定的，把 pathname 计入身份可以在上游换了文件时自动失效；
+// 酷狗与酷我的直链路径里带签名时间戳，每次解析都不一样，计入身份等于永远不命中缓存。
+// 因此只对账号制平台保留 pathname，游客平台用「平台 + 歌曲 + 音质 + 格式 + 码率」定位。
+function sourceIdentityPath(platform, source) {
+  if (!PLATFORMS[platform]?.account) return '';
+  try {
+    return new URL(source).pathname;
+  } catch (_) {
+    return '';
+  }
+}
+
 async function proxyPlayerSource(request, env, ctx, user, songId, resource, image = false, fill = true) {
   const source = image ? policy.allowedSource(resource.url, user.platform, true) : resource.url;
   if (!source) return env.ASSETS.fetch(new Request(new URL('/placeholder.svg', request.url)));
   const identity = image ? source : [user.platform, user.id, songId,
-    resource.quality, resource.format, resource.bitrate, !!resource.trial, new URL(source).pathname].join(':');
+    resource.quality, resource.format, resource.bitrate, !!resource.trial,
+    sourceIdentityPath(user.platform, source)].join(':');
   const key = (image ? 'cover/v2/' : 'audio/v2/') + await sha256Hex(identity);
   return cache.proxySource(request, {
     source, platform: user.platform, key, ctx, image, fill,
@@ -144,11 +162,11 @@ const PLAYLIST_MEMO_TTL_MS = 60000;
 const PLAYLIST_MEMO_MAX = 32;
 const playlistMemo = new Map();
 
-async function cachedPlaylist(env, user, id) {
+async function cachedPlaylist(env, user, id, ctx) {
   const key = `${user.platform}:${user.id}:${id}`;
   const hit = playlistMemo.get(key);
   if (hit && hit.expiresAt > Date.now()) return hit.value;
-  const value = await getPlaylist(env, user, id);
+  const value = await getPlaylist(env, user, id, ctx);
   if (playlistMemo.size >= PLAYLIST_MEMO_MAX) playlistMemo.delete(playlistMemo.keys().next().value);
   playlistMemo.set(key, { value, expiresAt: Date.now() + PLAYLIST_MEMO_TTL_MS });
   return value;
@@ -159,17 +177,28 @@ function handlePlayer(request, env, ctx) {
     capabilities: () => ({
       ...policy.capabilities('cloudflare', env.MUSIC_QUALITY, !!cacheEnabled(env)),
       degraded: degradeMode(env),
+      platforms: PLATFORM_IDS.map((id) => ({ id, account: PLATFORMS[id].account, library: PLATFORMS[id].library })),
     }),
-    session: (req, platform) => getSessionUser(env, req, platform),
+    // 平台规则交给 player-api，默认行为（只有网易云/QQ）保持不变
+    platforms: {
+      list: PLATFORM_IDS,
+      playlistId: (value, platform) => (PLATFORMS[platform]?.playlistIdPattern || /^\d{1,20}$/).test(String(value || '')),
+      songId: (value, platform) => (PLATFORMS[platform]?.songIdPattern || /^\d{1,20}$/).test(String(value || '')),
+    },
+    // 游客平台不需要登录：直接给一个没有 Cookie 的匿名用户
+    session: (req, platform) => PLATFORMS[platform]?.account
+      ? getSessionUser(env, req, platform)
+      : guestUser(platform),
     verifyGrant: (grant, platform, id) => getPlaybackUser(env, grant, platform, id),
     mintGrant: (user, id) => createPlaybackToken(env, user, id),
-    playlist: (user, id) => cachedPlaylist(env, user, id),
+    playlist: (user, id) => cachedPlaylist(env, user, id, ctx),
     resolve: (user, songId, quality, fresh) => resolvePlayerSource(env, user, songId, quality, fresh, ctx),
     cover: (req, user, url, song) => proxyPlayerSource(req, env, ctx, user, song.id, { url }, true),
     async media(req, user, song, id, source) {
       const response = await proxyPlayerSource(req, env, ctx, user, song.id, source);
-      return req.method === 'HEAD' ? response : cache.trackTransfer(response, () =>
-        ctx.waitUntil(recordPlayback(env, user.id, id, song)
+      if (req.method === 'HEAD') return response;
+      return cache.trackTransfer(response, () => ctx.waitUntil(
+        (user.guest ? Promise.resolve() : recordPlayback(env, user.id, id, song))
           .then(() => recordPlayEvent(env, {
             platform: user.platform, userId: user.id, playlistId: id, song,
             quality: source.quality, format: source.format, bitrate: source.bitrate,

@@ -2,7 +2,7 @@ PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  platform TEXT NOT NULL CHECK (platform IN ('netease', 'qq')),
+  platform TEXT NOT NULL CHECK (platform IN ('netease', 'qq', 'kugou', 'kuwo')),
   platform_user_id TEXT NOT NULL,
   nickname TEXT NOT NULL DEFAULT '',
   avatar TEXT NOT NULL DEFAULT '',
@@ -58,12 +58,14 @@ CREATE INDEX IF NOT EXISTS favorites_user_created_idx ON favorites(user_id, crea
 
 -- 播放统计：一次播放一行写入的聚合表，(用户, 歌单, 歌曲) 唯一。
 -- 保留策略按 last_played_at_ms 判断，不再需要每次播放做行数裁剪。
+-- duration_ms 只服务「关于」页的总播放时长，跟着歌曲元数据更新，不额外产生写入。
 CREATE TABLE IF NOT EXISTS play_stats (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   playlist_id TEXT NOT NULL,
   song_id TEXT NOT NULL,
   song_name TEXT NOT NULL DEFAULT '',
   artist TEXT NOT NULL DEFAULT '',
+  duration_ms INTEGER NOT NULL DEFAULT 0,
   play_count INTEGER NOT NULL DEFAULT 0,
   last_played_at_ms INTEGER NOT NULL,
   PRIMARY KEY (user_id, playlist_id, song_id)
@@ -91,3 +93,11 @@ CREATE TABLE IF NOT EXISTS song_sources (
   expires_at_ms INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS song_sources_expiry_idx ON song_sources(expires_at_ms);
+
+-- 站点统计。实时项（parsedSongs / generatedLinks）由生成链接时累加，
+-- 其余由 cron 与惰性刷新从 play_stats、users 重算，见 src/stats.js。
+CREATE TABLE IF NOT EXISTS site_stats (
+  key TEXT PRIMARY KEY,
+  value INTEGER NOT NULL DEFAULT 0,
+  updated_at_ms INTEGER NOT NULL DEFAULT 0
+);

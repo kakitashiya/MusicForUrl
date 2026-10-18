@@ -6,8 +6,10 @@ import { Badge } from '@/components/ui/card';
 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/tabs';
 import { CoverArt } from '@/components/playlist-card';
+import { VolumeControl } from '@/components/volume-control';
 import { useCapabilities } from '@/hooks/use-capabilities';
 import { usePlayer } from '@/stores/player';
+import { effectiveVolume, useVolume } from '@/stores/volume';
 
 export function MiniPlayer() {
   const audioRef = React.useRef<HTMLAudioElement>(null);
@@ -28,6 +30,8 @@ export function MiniPlayer() {
   const markEnded = usePlayer(state => state.markEnded);
   const fail = usePlayer(state => state.fail);
   const clear = usePlayer(state => state.clear);
+  const volume = useVolume(state => state.volume);
+  const muted = useVolume(state => state.muted);
   const { data: capabilities } = useCapabilities();
 
   const [queueOpen, setQueueOpen] = React.useState(false);
@@ -55,6 +59,12 @@ export function MiniPlayer() {
       });
     }
   }, [source?.mediaUrl, autoplay, trackKey]);
+
+  // 音量是全局的：播放器重新挂载、切歌、切路由之后都要回到同一档
+  React.useEffect(() => {
+    const audio = audioRef.current;
+    if (audio) audio.volume = effectiveVolume({ volume, muted });
+  }, [volume, muted, source?.mediaUrl]);
 
   if (!playlist || !track) return null;
 
@@ -159,6 +169,7 @@ export function MiniPlayer() {
         </div>
 
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          <VolumeControl className="hidden xl:flex" compact />
           <Select value={quality} onValueChange={value => void setQuality(value as QualityOption['id'])}>
             <SelectTrigger className="hidden h-8 w-[8.5rem] lg:flex" aria-label="音质">
               <SelectValue />

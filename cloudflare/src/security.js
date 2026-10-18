@@ -1,6 +1,10 @@
+import { PLATFORMS, guestUser, platform as platformOf, tokenHeader } from './platforms.js';
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const MAX_PLAYBACK_TTL_SECONDS = 48 * 60 * 60;
+// 游客播放令牌不绑定任何账号，因此没有可轮换的凭据；这个常量只是让载荷形状保持统一
+const GUEST_TOKEN_HASH = 'guest';
 
 function requireSecret(env) {
   const secret = String(env.ENCRYPTION_KEY || '');
@@ -107,10 +111,12 @@ async function createSession(env, platform, profile, cookie) {
 }
 
 function sessionToken(request, platform) {
-  return request.headers.get(platform === 'qq' ? 'x-qq-token' : 'x-token') || '';
+  return request.headers.get(tokenHeader(platform)) || '';
 }
 
 async function getSessionUser(env, request, platform, url) {
+  // 游客平台没有账号体系，任何会话令牌都不成立
+  if (!PLATFORMS[platform]?.account) return null;
   const token = sessionToken(request, platform);
   if (!token || token.length > 256) return null;
   const tokenHash = await sha256Hex(token);
@@ -142,12 +148,14 @@ async function signingKey(env, usage) {
 }
 
 async function createPlaybackToken(env, user, playlistId) {
+  const guest = !!user.guest || !PLATFORMS[user.platform]?.account;
   const payload = {
     v: 1,
     s: user.platform,
-    u: user.id,
+    // 游客令牌的 u 固定为 0：没有 users 行可挂靠，也就没有登出可以撤销的东西
+    u: guest ? 0 : user.id,
     p: String(playlistId),
-    h: user.token_hash,
+    h: guest ? GUEST_TOKEN_HASH : user.token_hash,
     e: Math.floor(Date.now() / 1000) + playbackTtlSeconds(env),
   };
   const content = toBase64Url(encoder.encode(JSON.stringify(payload)));
@@ -168,10 +176,15 @@ async function getPlaybackUser(env, token, platform, playlistId) {
     const payload = JSON.parse(decoder.decode(fromBase64Url(content)));
     if (
       payload.v !== 1 || payload.s !== platform || String(payload.p) !== String(playlistId) ||
-      !Number.isInteger(payload.u) || payload.u <= 0 ||
+      !Number.isInteger(payload.u) || payload.u < 0 ||
       !Number.isFinite(payload.e) || payload.e <= Math.floor(Date.now() / 1000) ||
       typeof payload.h !== 'string'
     ) return null;
+    // 游客平台只验签，不查库：每个音频分片请求因此省掉一次 D1 读取
+    if (!PLATFORMS[platform]?.account) {
+      return payload.u === 0 && payload.h === GUEST_TOKEN_HASH ? guestUser(platform) : null;
+    }
+    if (payload.u <= 0) return null;
     return env.DB.prepare(`
       SELECT * FROM users
       WHERE id = ? AND platform = ? AND token_hash = ? AND token_expires_at_ms > ?

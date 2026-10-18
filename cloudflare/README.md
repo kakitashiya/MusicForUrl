@@ -60,7 +60,20 @@ JSON 请求体按实际读取字节限制为 65,536 字节，不依赖 `Content-
 
 这样做的原因：旧实现每次播放执行 3 条语句，其中裁剪语句会扫描 1,000–2,000 行，一次 30 首歌的播放约消耗 **45,000 行读取**，对免费版每天 500 万行只够约 110 次播放。改为聚合后每次播放约 450 行读取、30 行写入。
 
-**升级顺序（重要）**：`npm run db:remote`（建表，幂等）→ `npm run db:backfill`（把旧 `play_logs` 聚合成 `play_stats`，**必须在部署新版 Worker 之前执行一次**）→ `npm run deploy`。`play_logs` 暂时保留以便回填，观察一个版本后可删除。`schema.sql` 可重复执行，不清空账号、歌单或收藏。
+**升级顺序（重要）**：`npm run db:remote`（建表，幂等）→ `npm run db:backfill`（把旧 `play_logs` 聚合成 `play_stats`，**必须在部署新版 Worker 之前执行一次**）→ `npm run db:migrate:stats`（给 `play_stats` 加 `duration_ms` 并建 `site_stats`，**同样必须在部署前执行**，否则 `recordPlayback` 会因为缺列整条失败）→ `npm run deploy`。`play_logs` 暂时保留以便回填，观察一个版本后可删除。`schema.sql` 可重复执行，不清空账号、歌单或收藏；新库直接用它即可，不需要跑迁移。
+
+### 站点统计
+
+「关于」页的数字来自 `site_stats`，写入路径刻意分两类：
+
+- **实时累加**：`parsedSongs`（生成链接时按歌单曲目数累加）与 `generatedLinks`。只在生成链接时各写一行，不进入播放路径。
+- **聚合派生**：累计播放、总播放时长、收录曲目、歌单数与使用人数，从 `play_stats` 与 `users` 汇总。这是一次全表扫描，因此只在 Cron（每天 UTC 03:17，在清理之后）与惰性刷新时执行。
+
+| 变量 | 作用 | 默认值 |
+| --- | --- | --- |
+| `STATS_REFRESH_MINUTES` | 派生统计的最小刷新间隔；调大可以降低扫描成本，代价是数字变旧 | `60` |
+
+游客平台（酷狗、酷我）没有 `users` 行，播放不写 `play_stats`，但会写入 Analytics Engine，因此仍计入匿名汇总。播放记录、收藏与歌单缓存的账号归属规则见 [平台与账号模型](PLATFORMS.md#多账号与数据归属)。
 
 ### 配额、降级与可观测性
 
@@ -74,7 +87,10 @@ JSON 请求体按实际读取字节限制为 65,536 字节，不依赖 `Content-
 | `AUDIO_CACHE_FILL_RATE` | R2 缓存填充抽样比例，额度吃紧时降低 | `1` |
 | `RESOLVE_CACHE` | `cache_api` 或 `d1`；无 Cache API 时自动回退 | `cache_api` |
 | `PLAYLIST_TRACK_CAP` | 单歌单解析上限，防止超大歌单 JSON 超出 10 ms CPU | `1000` |
+| `GUEST_PLAYLIST_MAX_PAGES` | 游客平台（酷狗）歌单最多拉取多少页，每页 30 首 | `16` |
+| `KUWO_COOKIE` | 酷我歌单接口被风控拒绝时，贴一份浏览器 Cookie 绕过引导 | 空 |
 | `REQUEST_TELEMETRY_SAMPLE` | 控制面请求遥测抽样比例 | `10` |
+| `STATS_REFRESH_MINUTES` | 站点统计派生指标的最小刷新间隔 | `60` |
 | `DEPLOY_VERSION` | 写入遥测的版本标记 | 空 |
 
 降级优先级是刻意的：额度是硬上限，一旦耗尽所有人都播不了，所以余量优先留给已经在看的人。`links-only` 通过 `/api/player/capabilities` 的 `degraded` 字段让前端隐藏站内播放器（每首歌 2 次请求降到 1 次）；`shed` 只让 `/playlist/parse`、`/playlist/url`、`/playlist/generate` 返回 503 与 `Retry-After`，**已签发的 M3U8 链接继续可用**。

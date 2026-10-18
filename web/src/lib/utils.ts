@@ -31,6 +31,19 @@ export function formatBitrate(bitrate: number | null): string {
   return bitrate ? `${Math.round(bitrate / 1000)} kbps` : '';
 }
 
-export function platformLabel(platform: string): string {
-  return platform === 'qq' ? 'QQ 音乐' : '网易云音乐';
+/** 大数字压缩：关于页的累计量会到六位数以上，直接铺开会撑爆卡片。 */
+export function formatCount(value: number): string {
+  const total = Math.max(0, Math.round(Number(value) || 0));
+  if (total >= 100_000_000) return `${(total / 100_000_000).toFixed(1)} 亿`;
+  if (total >= 10_000) return `${(total / 10_000).toFixed(1)} 万`;
+  return total.toLocaleString('zh-CN');
+}
+
+/** 把毫秒时长写成「1234 小时」这种可读形式，用于总播放时长。 */
+export function formatTotalDuration(milliseconds: number): string {
+  const minutes = Math.max(0, Math.round((Number(milliseconds) || 0) / 60000));
+  if (minutes < 60) return `${minutes} 分钟`;
+  const hours = minutes / 60;
+  if (hours < 1000) return `${hours.toFixed(hours < 10 ? 1 : 0)} 小时`;
+  return `${(hours / 24).toFixed(0)} 天`;
 }

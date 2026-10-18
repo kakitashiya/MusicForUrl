@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { cn } from '@/lib/utils';
+import { effectiveVolume, useVolume } from '@/stores/volume';
 
 /**
  * 直链与本地文件的播放舞台。本站歌单不走这里，由常驻的 MiniPlayer 负责。
@@ -10,6 +11,14 @@ export function MediaStage({ src, isHls, className }: { src: string; isHls: bool
   const videoRef = React.useRef<HTMLVideoElement>(null);
   const [error, setError] = React.useState('');
   const [audioOnly, setAudioOnly] = React.useState(false);
+  const volume = useVolume(state => state.volume);
+  const muted = useVolume(state => state.muted);
+
+  // 全局音量同样作用于这里的预览：用户调过一次音量，就不该再有两套。
+  React.useEffect(() => {
+    const video = videoRef.current;
+    if (video) video.volume = effectiveVolume({ volume, muted });
+  }, [volume, muted, src]);
 
   React.useEffect(() => {
     const video = videoRef.current;

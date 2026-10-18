@@ -4,9 +4,10 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { ChevronLeft, ChevronRight, Link2, Trash2 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { ACCOUNT_PLATFORMS, platformInfo } from '@/lib/platforms';
 import { readPersonalPlatform, writePersonalPlatform } from '@/lib/storage';
 import type { FavoriteItem, HistoryItem, Paged, Platform, PlaylistSummary, TopSong } from '@/lib/types';
-import { formatDateTime } from '@/lib/utils';
+import { formatDateTime, imageSrc } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -69,12 +70,17 @@ function GridSkeleton({ count = 6 }: { count?: number }) {
 }
 
 export function UserView() {
-  const [platform, setPlatform] = React.useState<Platform>(readPersonalPlatform() || 'netease');
+  const [platform, setPlatform] = React.useState<Platform>(() => {
+    const remembered = readPersonalPlatform();
+    // 只保留有账号能力的平台：酷狗/酷我没有个人数据可言
+    return remembered && ACCOUNT_PLATFORMS.some(item => item.id === remembered) ? remembered : 'netease';
+  });
   const users = useAuth(state => state.users);
   const openLogin = useUi(state => state.openLogin);
   const openPlaylist = usePlayer(state => state.open);
   const navigate = useNavigate();
-  const loggedIn = !!users[platform];
+  const user = users[platform];
+  const loggedIn = !!user;
 
   React.useEffect(() => { writePersonalPlatform(platform); }, [platform]);
 
@@ -109,20 +115,38 @@ export function UserView() {
             ariaLabel="音乐平台"
             value={platform}
             onChange={setPlatform}
-            options={[
-              { value: 'netease', label: '网易云音乐' },
-              { value: 'qq', label: 'QQ 音乐' },
-            ]}
+            options={ACCOUNT_PLATFORMS.map(item => ({ value: item.id, label: item.short }))}
           />
         )}
       />
 
-      {!loggedIn ? (
+      {/* 数据归属提示：明确告诉用户这一页只属于哪一个账号 */}
+      {user ? (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 shadow-[var(--shadow-card)]">
+          <img
+            src={imageSrc(user.avatar)}
+            alt=""
+            className="size-9 shrink-0 rounded-full border border-border object-cover"
+            onError={event => { event.currentTarget.src = '/placeholder.svg'; }}
+          />
+          <p className="min-w-0 flex-1 text-[12.5px] text-muted-foreground">
+            以下数据都属于
+            <strong className="mx-1 font-medium text-foreground">{user.nickname || '当前账号'}</strong>
+            （{platformInfo(platform).label} · ID {user.userId}）。
+            换账号后这里会整体切换成那个账号的数据，互不覆盖。
+          </p>
+          <Button variant="ghost" size="sm" asChild>
+            <a href="/accounts">管理账号</a>
+          </Button>
+        </div>
+      ) : (
         <EmptyState
-          text="登录后可以查看歌单、收藏和最近播放。"
+          text={`登录${platformInfo(platform).label}后可以查看歌单、收藏和最近播放。`}
           action={<Button size="sm" onClick={() => openLogin(platform)}>登录音乐账号</Button>}
         />
-      ) : (
+      )}
+
+      {user && (
         <Tabs defaultValue="playlists">
           <TabsList className="w-fit">
             <TabsTrigger value="playlists">我的歌单</TabsTrigger>

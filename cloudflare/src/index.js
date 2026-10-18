@@ -8,14 +8,17 @@ import {
   logout, requireSecret, sha256Hex,
 } from './security.js';
 import {
-  adapter, buildLitePlaylist, getPlaylist, parsePlaylistId, songUrl,
+  adapter, buildLitePlaylist, getPlaylist, parsePlaylistId, songUrl, streamPrefix,
   validPlaylistId, validSongId,
 } from './playlists.js';
+import { PLATFORMS, capabilityMatrix, guestUser, platformFromPath } from './platforms.js';
+import { bumpParsedSongs, readSiteStats, refreshSiteStats } from './stats.js';
 import { recordPlayEvent, recordRequestEvent } from './telemetry.js';
 import { degradeMode, secondsUntilUtcMidnight } from './degrade.js';
 
 const QR_TTL_MS = 3 * 60 * 1000;
 const MAX_REQUEST_BODY_BYTES = 65536;
+const NO_LIBRARY_MESSAGE = '该平台只支持歌单解析与播放，没有账号体系，因此没有个人歌单、收藏与播放记录。';
 
 class RequestBodyTooLargeError extends Error {}
 
@@ -31,7 +34,10 @@ function fail(message, status = 400) {
 }
 
 function viewUser(user) {
-  return { userId: user.platform_user_id, nickname: user.nickname, avatar: user.avatar, vipType: user.vip_type };
+  return {
+    userId: user.platform_user_id, nickname: user.nickname, avatar: user.avatar,
+    vipType: user.vip_type, platform: user.platform,
+  };
 }
 
 function numberParam(value, fallback, max) {
@@ -88,8 +94,7 @@ async function requireUser(env, request, platform, url) {
 }
 
 function playlistUrlPayload(origin, platform, token, playlistId) {
-  const prefix = platform === 'qq' ? '/api/qq/playlist' : '/api/playlist';
-  const liteUrl = `${origin}${prefix}/m3u8/${encodeURIComponent(token)}/${playlistId}/stream.m3u8`;
+  const liteUrl = `${origin}${streamPrefix(platform)}/m3u8/${encodeURIComponent(token)}/${playlistId}/stream.m3u8`;
   return {
     url: liteUrl,
     urls: [{
@@ -123,6 +128,13 @@ async function accountStatus(platform, cookie) {
 
 async function authRoute(request, env, platform, path, url) {
   const method = request.method;
+  // 游客平台没有账号体系：状态查询照常返回「未登录 + 不支持」，其余接口明确拒绝
+  if (!PLATFORMS[platform].account) {
+    if (method === 'GET' && path === '/status') {
+      return json({ success: true, data: { logged: false, supported: false, message: NO_LIBRARY_MESSAGE } });
+    }
+    return fail(NO_LIBRARY_MESSAGE, 501);
+  }
   const upstream = adapter(platform);
 
   if (method === 'GET' && path === '/status') {
@@ -234,8 +246,10 @@ async function authRoute(request, env, platform, path, url) {
   return fail('接口不存在', 404);
 }
 
-async function playlistRoute(request, env, platform, path, url) {
-  const user = await requireUser(env, request, platform, url);
+async function playlistRoute(request, env, ctx, platform, path, url) {
+  const meta = PLATFORMS[platform];
+  // 游客平台不需要登录：解析与播放只依赖公开接口
+  const user = meta.account ? await requireUser(env, request, platform, url) : guestUser(platform);
   if (!user) return fail('请先登录', 401);
 
   // 额度耗尽时只拒新会话，已签发的播放链接不受影响
@@ -247,6 +261,7 @@ async function playlistRoute(request, env, platform, path, url) {
   }
 
   if (request.method === 'GET' && path === '/user') {
+    if (!meta.library) return fail(NO_LIBRARY_MESSAGE, 403);
     const cookie = await decryptCookie(env, user);
     const result = await adapter(platform).getUserPlaylists(user.platform_user_id, cookie);
     const all = Array.isArray(result.playlists) ? result.playlists : [];
@@ -261,7 +276,7 @@ async function playlistRoute(request, env, platform, path, url) {
     }
     const playlistId = parsePlaylistId(url.searchParams.get('url'), platform);
     if (!playlistId) return fail('无效的歌单链接或 ID');
-    const playlist = await getPlaylist(env, user, playlistId);
+    const playlist = await getPlaylist(env, user, playlistId, ctx);
     return json({ success: true, data: {
       id: playlist.id, name: playlist.name, cover: playlist.cover, songCount: playlist.songCount,
     } });
@@ -269,8 +284,8 @@ async function playlistRoute(request, env, platform, path, url) {
 
   if (request.method === 'GET' && path === '/url') {
     const playlistId = String(url.searchParams.get('id') || '');
-    if (!validPlaylistId(playlistId)) return fail('无效的歌单 ID');
-    await getPlaylist(env, user, playlistId);
+    if (!validPlaylistId(playlistId, platform)) return fail('无效的歌单 ID');
+    await getPlaylist(env, user, playlistId, ctx);
     const token = await createPlaybackToken(env, user, playlistId);
     return json({ success: true, data: playlistUrlPayload(url.origin, platform, token, playlistId) });
   }
@@ -283,8 +298,10 @@ async function playlistRoute(request, env, platform, path, url) {
     const body = await bodyJson(request);
     const playlistId = parsePlaylistId(body.url, platform);
     if (!playlistId) return fail('无效的歌单链接或 ID');
-    const playlist = await getPlaylist(env, user, playlistId);
+    const playlist = await getPlaylist(env, user, playlistId, ctx);
     const token = await createPlaybackToken(env, user, playlistId);
+    // 「累计解析歌曲总数」的唯一写入点：每次生成链接按歌单曲目数累加
+    ctx.waitUntil(bumpParsedSongs(env, playlist.tracks.length));
     return json({ success: true, data: {
       playlist: {
         id: playlist.id, name: playlist.name, cover: playlist.cover, songCount: playlist.songCount,
@@ -302,7 +319,7 @@ async function playbackRoute(request, env, ctx, platform, path, url) {
     const [, token, playlistId] = playlistMatch;
     const user = await getPlaybackUser(env, token, platform, playlistId);
     if (!user) return new Response('Token expired', { status: 401 });
-    const playlist = await getPlaylist(env, user, playlistId);
+    const playlist = await getPlaylist(env, user, playlistId, ctx);
     const text = buildLitePlaylist(request, platform, token, playlistId, playlist.tracks);
     return new Response(request.method === 'HEAD' ? null : text, { headers: {
       'content-type': 'application/vnd.apple.mpegurl; charset=utf-8',
@@ -318,19 +335,21 @@ async function playbackRoute(request, env, ctx, platform, path, url) {
     if (!validPlaylistId(playlistId) || !validSongId(songId, platform)) return fail('无效的歌曲或歌单 ID');
     const user = await getPlaybackUser(env, token, platform, playlistId);
     if (!user) return fail('播放链接已过期', 401);
-    const playlist = await getPlaylist(env, user, playlistId);
+    const playlist = await getPlaylist(env, user, playlistId, ctx);
     const song = playlist.tracks.find((track) => String(track.id) === songId);
     if (!song) return fail('歌曲不属于该歌单', 403);
     const resource = await resolvePlayerSource(env, user, songId, url.searchParams.get('quality') || env.MUSIC_QUALITY || 'low', false, ctx);
     const destination = resource.url;
     if (!destination) return fail('歌曲不可播放，可能无版权或需要对应会员权限', 404);
-    const record = (cacheState = '') => ctx.waitUntil(recordPlayback(env, user.id, playlistId, song)
-      .then(() => recordPlayEvent(env, {
-        platform, userId: user.id, playlistId, song, quality: resource.quality,
-        format: resource.format, bitrate: resource.bitrate, trial: resource.trial,
-        surface: 'hls', cacheState, colo: request.cf?.colo,
-      }))
-      .catch(error => console.error('[Playback history]', error)));
+    // 游客平台没有 users 行，play_stats 的外键无法成立；分析数据仍然进 AE
+    const record = (cacheState = '') => ctx.waitUntil(
+      (user.guest ? Promise.resolve() : recordPlayback(env, user.id, playlistId, song))
+        .then(() => recordPlayEvent(env, {
+          platform, userId: user.id, playlistId, song, quality: resource.quality,
+          format: resource.format, bitrate: resource.bitrate, trial: resource.trial,
+          surface: 'hls', cacheState, colo: request.cf?.colo,
+        }))
+        .catch(error => console.error('[Playback history]', error)));
     if (url.searchParams.get('hls') === '1') {
       let cacheState = '';
       const fetchAudio = (input, options) => proxyPlayerSource(new Request(input, options),
@@ -355,10 +374,11 @@ async function playbackRoute(request, env, ctx, platform, path, url) {
 }
 
 async function favoritesRoute(request, env, platform, path, url) {
+  if (!PLATFORMS[platform].library) return fail(NO_LIBRARY_MESSAGE, 403);
   const user = await requireUser(env, request, platform, url);
   if (!user) return fail('请先登录', 401);
   const playlistId = path.startsWith('/check/') ? path.slice(7) : path.slice(1);
-  if (path && !validPlaylistId(playlistId)) return fail('无效的歌单 ID');
+  if (path && !validPlaylistId(playlistId, platform)) return fail('无效的歌单 ID');
 
   if (request.method === 'GET' && !path) {
     const limit = numberParam(url.searchParams.get('limit'), 20, 100) || 20;
@@ -410,6 +430,7 @@ async function favoritesRoute(request, env, platform, path, url) {
 }
 
 async function historyRoute(request, env, platform, path, url) {
+  if (!PLATFORMS[platform].library) return fail(NO_LIBRARY_MESSAGE, 403);
   const user = await requireUser(env, request, platform, url);
   if (!user) return fail('请先登录', 401);
   if (request.method !== 'GET') return fail('接口不存在', 404);
@@ -440,7 +461,7 @@ async function historyRoute(request, env, platform, path, url) {
     })), total: count.total });
   }
 
-  if (platform === 'netease' && path === '/top') {
+  if (path === '/top') {
     const limit = numberParam(url.searchParams.get('limit'), 10, 50) || 10;
     const rows = await env.DB.prepare(`
       SELECT song_id, MAX(song_name) AS song_name, MAX(artist) AS artist,
@@ -464,14 +485,19 @@ async function api(request, env, ctx) {
       degradeMode: degradeMode(env),
       version: String(env.DEPLOY_VERSION || ''),
       features: { analytics: !!(env.ANALYTICS || env.ANALYTICS_REQUESTS), audioCache: !!env.AUDIO_CACHE },
+      platforms: capabilityMatrix(),
     });
   }
   if (!env.DB) return fail('未绑定 D1 数据库', 503);
   requireSecret(env);
   if (pathname.startsWith('/api/player/')) return handlePlayer(request, env, ctx);
+  // 站点统计对所有访客开放，不含任何账号维度
+  if (pathname === '/api/stats') return json({ success: true, data: await readSiteStats(env) });
 
-  const platform = pathname.startsWith('/api/qq/') ? 'qq' : 'netease';
-  const path = pathname.slice(platform === 'qq' ? '/api/qq'.length : '/api'.length);
+  const routed = platformFromPath(pathname);
+  if (!routed) return fail('接口不存在', 404);
+  const platform = routed.id;
+  const path = routed.path;
 
   if (path.startsWith('/auth/')) {
     return authRoute(request, env, platform, path.slice('/auth'.length), url);
@@ -479,7 +505,7 @@ async function api(request, env, ctx) {
   if (path.startsWith('/playlist/')) {
     const playback = await playbackRoute(request, env, ctx, platform, path, url);
     if (playback) return playback;
-    return playlistRoute(request, env, platform, path.slice('/playlist'.length), url);
+    return playlistRoute(request, env, ctx, platform, path.slice('/playlist'.length), url);
   }
   if (path.startsWith('/song/') || path.startsWith('/hls/') || path.startsWith('/mp4/')) {
     return await playbackRoute(request, env, ctx, platform, path, url) || fail('接口不存在', 404);
@@ -509,6 +535,8 @@ export default {
       const removed = results.slice(1).reduce((total, result) => total + (result?.meta?.changes || 0), 0);
       console.log(`[Cron] pruned ${removed} expired rows`);
     }));
+    // 统计的派生指标在清理之后重算，这样「关于」页的数字与保留策略一致
+    ctx.waitUntil(refreshSiteStats(env).catch((error) => console.error('[Cron] stats', error)));
   },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);

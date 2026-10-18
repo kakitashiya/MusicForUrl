@@ -195,7 +195,8 @@ test('account status exposes the signed-in platform identity without credentials
     const body = await response.json();
     assert.equal(body.data.logged, true);
     assert.equal(body.data.user.userId, userId);
-    assert.deepEqual(Object.keys(body.data.user).sort(), ['avatar', 'nickname', 'userId', 'vipType']);
+    assert.deepEqual(Object.keys(body.data.user).sort(), ['avatar', 'nickname', 'platform', 'userId', 'vipType']);
+    assert.equal(body.data.user.platform, platform);
     const anonymous = await worker.fetch(new Request('https://music.example.test' + path), env, ctx);
     assert.deepEqual((await anonymous.json()).data, { logged: false });
   }

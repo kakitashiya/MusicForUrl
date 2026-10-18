@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
-import { platformLabel } from '@/lib/utils';
+import { ACCOUNT_PLATFORMS, platformLabel } from '@/lib/platforms';
 import type { AccountUser, Platform } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -228,8 +228,14 @@ export function LoginDialog() {
     closeLogin();
   }, [adopt, closeLogin]);
 
-  const onNeteaseSuccess = React.useMemo(() => handleSuccess('netease'), [handleSuccess]);
-  const onQqSuccess = React.useMemo(() => handleSuccess('qq'), [handleSuccess]);
+  // 每个平台的成功回调都要稳定引用，否则二维码面板会被反复重挂
+  const handlers = React.useMemo(
+    () => Object.fromEntries(ACCOUNT_PLATFORMS.map(item => [item.id, handleSuccess(item.id)])) as
+      Record<string, (token: string, user: AccountUser) => void>,
+    [handleSuccess],
+  );
+  // 游客平台没有登录流程：弹窗里只展示能登录的平台，其余平台走能力说明
+  const active: Platform = ACCOUNT_PLATFORMS.some(item => item.id === platform) ? platform : 'netease';
 
   return (
     <Dialog open={open} onOpenChange={next => { if (!next) closeLogin(); }}>
@@ -237,22 +243,19 @@ export function LoginDialog() {
         <DialogHeader>
           <DialogTitle>登录音乐账号</DialogTitle>
           <DialogDescription>
-            每个平台保留一个当前登录账号。账号信息加密保存在服务端，不会修改平台资料。
+            每个平台可以记住多个账号，同一时间只有一个生效。个人数据（歌单、收藏、播放记录）严格按账号区分。
           </DialogDescription>
         </DialogHeader>
 
         <Segmented
           ariaLabel="选择平台"
           className="mb-4"
-          value={platform}
+          value={active}
           onChange={setPlatform}
-          options={[
-            { value: 'netease', label: '网易云音乐' },
-            { value: 'qq', label: 'QQ 音乐' },
-          ]}
+          options={ACCOUNT_PLATFORMS.map(item => ({ value: item.id, label: item.label }))}
         />
 
-        {platform === 'netease' ? (
+        {active === 'netease' ? (
           <Tabs defaultValue="qrcode">
             <TabsList className="w-full">
               <TabsTrigger value="qrcode">扫码</TabsTrigger>
@@ -260,14 +263,18 @@ export function LoginDialog() {
               <TabsTrigger value="password">密码</TabsTrigger>
               <TabsTrigger value="cookie">Cookie</TabsTrigger>
             </TabsList>
-            <TabsContent value="qrcode"><QrPanel platform="netease" onSuccess={onNeteaseSuccess} /></TabsContent>
-            <TabsContent value="captcha"><CaptchaPanel platform="netease" onSuccess={onNeteaseSuccess} /></TabsContent>
-            <TabsContent value="password"><PasswordPanel platform="netease" onSuccess={onNeteaseSuccess} /></TabsContent>
-            <TabsContent value="cookie"><CookiePanel platform="netease" onSuccess={onNeteaseSuccess} /></TabsContent>
+            <TabsContent value="qrcode"><QrPanel platform="netease" onSuccess={handlers.netease} /></TabsContent>
+            <TabsContent value="captcha"><CaptchaPanel platform="netease" onSuccess={handlers.netease} /></TabsContent>
+            <TabsContent value="password"><PasswordPanel platform="netease" onSuccess={handlers.netease} /></TabsContent>
+            <TabsContent value="cookie"><CookiePanel platform="netease" onSuccess={handlers.netease} /></TabsContent>
           </Tabs>
         ) : (
-          <QrPanel platform="qq" onSuccess={onQqSuccess} />
+          <QrPanel platform="qq" onSuccess={handlers.qq} />
         )}
+
+        <p className="mt-4 border-t border-border pt-3 text-[12px] text-muted-foreground">
+          酷狗与酷我无需登录即可解析歌单与播放，因此没有登录入口，也没有个人歌单、收藏与播放记录。
+        </p>
       </DialogContent>
     </Dialog>
   );
