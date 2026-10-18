@@ -2,12 +2,12 @@ import * as React from 'react';
 import { toast } from 'sonner';
 import { FolderOpen, MonitorPlay, X } from 'lucide-react';
 import { parseStreamUrl } from '@/lib/api';
-import { imageSrc } from '@/lib/utils';
 import { validateMediaUrl } from '@/lib/workspace-rules';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { MediaStage } from '@/components/media-stage';
+import { CoverArt } from '@/components/playlist-card';
+import { PageHeader } from '@/components/page-header';
 import { usePlayer } from '@/stores/player';
 
 export function PreviewView() {
@@ -30,13 +30,14 @@ export function PreviewView() {
     const stream = parseStreamUrl(value);
     if (stream) {
       await openPlaylist(stream.platform, stream.playlistId, stream.grant);
-      toast.success('已载入本站歌单，使用下方常驻播放器控制');
+      toast.success('已载入本站歌单，使用页面底部播放器控制');
       return;
     }
 
     try {
       const url = validateMediaUrl(value);
-      setSource({ url, isHls: /\.m3u8(\?|$)/i.test(new URL(url).pathname + new URL(url).search), local: false });
+      const parsed = new URL(url);
+      setSource({ url, isHls: /\.m3u8$/i.test(parsed.pathname), local: false });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '链接无效');
     }
@@ -51,69 +52,59 @@ export function PreviewView() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
-      <div>
-        <p className="text-xs uppercase tracking-widest text-muted-foreground">Preview</p>
-        <h1 className="text-xl font-semibold">媒体预览</h1>
-        <p className="mt-1 text-[13px] text-muted-foreground">
-          可以粘贴本站生成的 stream.m3u8 链接、HTTPS 媒体直链，或选择本地文件。本地文件不会上传。
-        </p>
-      </div>
+    <div className="mx-auto flex w-full max-w-[1180px] flex-col gap-5">
+      <PageHeader
+        eyebrow="Preview"
+        title="媒体预览"
+        description="粘贴本站生成的 stream.m3u8 链接、HTTPS 媒体直链，或选择本地文件。本地文件不会上传。"
+      />
 
-      <Card>
-        <CardContent className="flex flex-col gap-3 pt-4">
-          <form className="flex gap-2" onSubmit={open}>
-            <Input
-              value={input}
-              onChange={event => setInput(event.target.value)}
-              placeholder="粘贴播放链接或媒体直链"
-              aria-label="媒体链接"
-              autoComplete="off"
-              spellCheck={false}
-            />
-            <Button type="submit"><MonitorPlay />打开</Button>
-          </form>
-          <div className="flex items-center gap-2">
-            <input ref={fileRef} type="file" accept="audio/*,video/*,.m3u8" className="hidden" onChange={openFile} />
-            <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()}>
-              <FolderOpen />选择本地文件
+      <section className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 shadow-[var(--shadow-card)]">
+        <form className="flex flex-col gap-2.5 sm:flex-row" onSubmit={open}>
+          <Input
+            value={input}
+            onChange={event => setInput(event.target.value)}
+            placeholder="粘贴播放链接或媒体直链"
+            aria-label="媒体链接"
+            autoComplete="off"
+            spellCheck={false}
+            className="h-11 flex-1"
+          />
+          <Button type="submit" className="h-11 px-6"><MonitorPlay />打开</Button>
+        </form>
+        <div className="flex flex-wrap items-center gap-2">
+          <input ref={fileRef} type="file" accept="audio/*,video/*,.m3u8" className="hidden" onChange={openFile} />
+          <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()}>
+            <FolderOpen />选择本地文件
+          </Button>
+          {source && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                if (source.local) URL.revokeObjectURL(source.url);
+                setSource(null);
+                setInput('');
+              }}
+            >
+              <X />清除
             </Button>
-            {source && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  if (source.local) URL.revokeObjectURL(source.url);
-                  setSource(null);
-                  setInput('');
-                }}
-              >
-                <X />清除
-              </Button>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+          )}
+        </div>
+      </section>
 
       {source && <MediaStage src={source.url} isHls={source.isHls} />}
 
       {playlist && (
-        <Card>
-          <CardHeader>
-            <div className="flex items-center gap-3">
-              <img
-                src={imageSrc(playlist.cover)}
-                alt=""
-                className="size-12 rounded-md border border-border object-cover"
-                onError={event => { event.currentTarget.src = '/placeholder.svg'; }}
-              />
-              <div className="min-w-0">
-                <CardTitle className="truncate">{playlist.name}</CardTitle>
-                <p className="text-[13px] text-muted-foreground">{playlist.tracks.length} 首 · 使用页面底部播放器控制</p>
-              </div>
-            </div>
-          </CardHeader>
-        </Card>
+        <section className="flex items-center gap-4 rounded-xl border border-border bg-card p-4 shadow-[var(--shadow-card)]">
+          <CoverArt src={playlist.cover} seed={playlist.id} className="size-14 shrink-0 rounded-lg" />
+          <div className="min-w-0">
+            <p className="truncate text-[15px] font-semibold">{playlist.name}</p>
+            <p className="text-[12.5px] text-muted-foreground">
+              {playlist.tracks.length} 首 · 使用页面底部播放器控制
+            </p>
+          </div>
+        </section>
       )}
     </div>
   );

@@ -5,7 +5,6 @@ import { NAV_ORDER, VIEW_TITLES, viewPath, type ViewName } from '@/lib/routes';
 import { imageSrc, platformLabel } from '@/lib/utils';
 import { useAuth } from '@/stores/auth';
 import { useUi } from '@/stores/ui';
-import { Badge } from '@/components/ui/card';
 
 const ICONS: Record<ViewName, typeof Link2> = {
   home: Link2,
@@ -15,80 +14,71 @@ const ICONS: Record<ViewName, typeof Link2> = {
   about: Info,
 };
 
+const itemClass = (active: boolean) => cn(
+  'grid size-11 place-items-center rounded-lg transition-colors',
+  active
+    ? 'bg-rail-active text-rail-active-foreground'
+    : 'text-rail-foreground hover:bg-white/8 hover:text-rail-active-foreground',
+);
+
+/** 图标轨道：窄屏时横向排在顶部，宽屏时竖向固定在左侧。 */
 export function Sidebar() {
   const users = useAuth(state => state.users);
-  const ready = useAuth(state => state.ready);
   const openLogin = useUi(state => state.openLogin);
   const active = users.qq ? 'qq' : users.netease ? 'netease' : '';
+  const account = active ? users[active] : null;
 
   return (
-    <nav className="flex flex-col gap-4 border-border bg-card p-3 md:h-full md:w-56 md:border-r" aria-label="主导航">
-      <NavLink to="/" className="flex items-center gap-2 px-1 py-1.5">
-        <img src="/brand.svg" alt="" className="size-6" />
-        <span className="text-sm font-semibold tracking-tight">MusicForUrl</span>
+    <nav
+      aria-label="主导航"
+      className="flex shrink-0 items-center gap-1 bg-rail px-3 py-2 md:h-full md:w-[76px] md:flex-col md:gap-1.5 md:px-0 md:py-4"
+    >
+      <NavLink to="/" aria-label="MusicForUrl 首页" className="mr-1 grid size-9 place-items-center md:mr-0 md:mb-3">
+        <img src="/brand.svg" alt="" className="size-7" />
       </NavLink>
 
-      <ul className="grid grid-cols-5 gap-1 md:grid-cols-1">
-        {NAV_ORDER.map(view => {
-          const Icon = ICONS[view];
-          return (
-            <li key={view}>
-              <NavLink
-                to={viewPath(view)}
-                end={view === 'home'}
-                className={({ isActive }) => cn(
-                  'flex flex-col items-center gap-1 rounded-md px-2 py-2 text-xs font-medium transition-colors md:flex-row md:gap-2 md:text-[13px]',
-                  isActive
-                    ? 'bg-accent text-accent-foreground'
-                    : 'text-muted-foreground hover:bg-accent/60 hover:text-accent-foreground',
-                )}
-              >
-                <Icon className="size-4 shrink-0" />
-                <span>{VIEW_TITLES[view]}</span>
-              </NavLink>
-            </li>
-          );
-        })}
-      </ul>
+      {NAV_ORDER.map(view => {
+        const Icon = ICONS[view];
+        return (
+          <NavLink
+            key={view}
+            to={viewPath(view)}
+            end={view === 'home'}
+            title={VIEW_TITLES[view]}
+            aria-label={VIEW_TITLES[view]}
+            className={({ isActive }) => itemClass(isActive)}
+          >
+            <Icon className="size-[18px]" />
+          </NavLink>
+        );
+      })}
 
-      <div className="mt-auto border-t border-border pt-3">
-        {active ? (
+      <div className="ml-auto md:mt-auto md:ml-0">
+        {account ? (
           <NavLink
             to="/accounts"
-            className="flex items-center gap-2 rounded-md p-2 transition-colors hover:bg-accent"
+            title={`${account.nickname || '已登录'} · ${platformLabel(active)}`}
+            aria-label="账号管理"
+            className={({ isActive }) => itemClass(isActive)}
           >
             <img
-              src={imageSrc(users[active]?.avatar)}
+              src={imageSrc(account.avatar)}
               alt=""
-              className="size-7 rounded-full border border-border object-cover"
+              className="size-7 rounded-full border border-white/20 object-cover"
+              onError={event => { event.currentTarget.src = '/placeholder.svg'; }}
             />
-            <span className="min-w-0">
-              <span className="block truncate text-[13px] font-medium">
-                {users[active]?.nickname || '已登录'}
-              </span>
-              <span className="block text-[11px] text-muted-foreground">{platformLabel(active)}</span>
-            </span>
           </NavLink>
         ) : (
           <button
             type="button"
             onClick={() => openLogin('netease')}
-            className="flex w-full items-center gap-2 rounded-md p-2 text-left transition-colors hover:bg-accent"
+            title="登录音乐账号"
+            aria-label="登录音乐账号"
+            className={itemClass(false)}
           >
-            <CircleUserRound className="size-6 text-muted-foreground" />
-            <span className="min-w-0">
-              <span className="block text-[13px] font-medium">
-                {ready ? '登录音乐账号' : '账号信息待确认'}
-              </span>
-              <span className="block text-[11px] text-muted-foreground">网易云音乐 · QQ 音乐</span>
-            </span>
+            <CircleUserRound className="size-[18px]" />
           </button>
         )}
-        {users.netease && users.qq ? (
-          <div className="mt-2 px-2">
-            <Badge variant="outline">两个平台均已登录</Badge>
-          </div>
-        ) : null}
       </div>
     </nav>
   );

@@ -60,22 +60,32 @@ interface SegmentedOption<T extends string> {
   label: React.ReactNode;
 }
 
-/** 分段控件。滑块用 layoutId 共享元素过渡，取代旧版手写测量宽度的做法。 */
+/**
+ * 分段控件。滑块用 layoutId 共享元素过渡，取代旧版手写测量宽度的做法。
+ * tone="hero" 用于首页横幅：深色底 + 白色选中块。
+ */
 export function Segmented<T extends string>({
-  value, options, onChange, className, ariaLabel,
+  value, options, onChange, className, ariaLabel, tone = 'default',
 }: {
   value: T;
   options: SegmentedOption<T>[];
   onChange: (value: T) => void;
   className?: string;
   ariaLabel?: string;
+  tone?: 'default' | 'hero';
 }) {
   const id = React.useId();
+  const hero = tone === 'hero';
   return (
     <div
       role="tablist"
       aria-label={ariaLabel}
-      className={cn('inline-flex items-center gap-1 rounded-md bg-muted p-1', className)}
+      // w-fit 而不是靠父级：否则在 flex-col 容器里会被 align-items:stretch 拉满整行
+      className={cn(
+        'inline-flex w-fit items-center gap-1 rounded-lg p-1',
+        hero ? 'bg-[var(--hero-seg)]' : 'bg-muted',
+        className,
+      )}
     >
       {options.map(option => {
         const active = option.value === value;
@@ -87,15 +97,23 @@ export function Segmented<T extends string>({
             aria-selected={active}
             onClick={() => onChange(option.value)}
             className={cn(
-              'relative inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[13px] font-medium',
-              'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-              active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+              'relative inline-flex items-center gap-1.5 rounded-md px-4 py-1.5 text-[13px] font-medium',
+              'transition-colors focus-visible:outline-none focus-visible:ring-2',
+              hero ? 'focus-visible:ring-white/70' : 'focus-visible:ring-ring',
+              active
+                ? hero ? 'text-[var(--hero-mid)]' : 'text-foreground'
+                : hero
+                  ? 'text-[var(--hero-seg-foreground)] hover:text-white'
+                  : 'text-muted-foreground hover:text-foreground',
             )}
           >
             {active && (
               <m.span
                 layoutId={`segmented-${id}`}
-                className="absolute inset-0 rounded-md bg-card shadow-sm"
+                className={cn(
+                  'absolute inset-0 rounded-md',
+                  hero ? 'bg-[var(--hero-field)]' : 'bg-card shadow-sm',
+                )}
                 transition={{ duration: DURATION.indicator, ease: [0.4, 0, 0.2, 1] }}
               />
             )}
