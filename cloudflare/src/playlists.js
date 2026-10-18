@@ -1,4 +1,5 @@
 import qqmusic from '../../lib/qqmusic.js';
+import policy from '../../lib/player-policy.js';
 import * as netease from './netease.js';
 import { decryptCookie } from './security.js';
 import { mp3Quality } from './audio-quality.js';
@@ -54,10 +55,10 @@ async function getPlaylist(env, user, playlistId) {
     try {
       const tracks = JSON.parse(cached.songs_json);
       if (Array.isArray(tracks)) {
-        return {
+        return policy.markNormalized({
           id: playlistId, name: cached.name, cover: cached.cover,
           songCount: cached.song_count, tracks,
-        };
+        }, user.platform);
       }
     } catch (_) {
       // Refresh a damaged cache entry.
@@ -65,7 +66,7 @@ async function getPlaylist(env, user, playlistId) {
   }
 
   const cookie = await decryptCookie(env, user);
-  const playlist = await adapter(user.platform).getPlaylistDetail(playlistId, cookie);
+  const playlist = await adapter(user.platform).getPlaylistDetail(playlistId, cookie, env);
   const tracks = normalizedSongs(user.platform, playlist.tracks);
   const ttl = Math.max(60, Math.min(7 * CACHE_TTL_SECONDS, Number(env.CACHE_TTL) || CACHE_TTL_SECONDS));
   await env.DB.prepare(`
@@ -81,13 +82,13 @@ async function getPlaylist(env, user, playlistId) {
     user.id, playlistId, String(playlist.name || ''), String(playlist.cover || ''),
     Number(playlist.songCount) || tracks.length, JSON.stringify(tracks), Date.now() + ttl * 1000,
   ).run();
-  return {
+  return policy.markNormalized({
     id: playlistId,
     name: String(playlist.name || ''),
     cover: String(playlist.cover || ''),
     songCount: Number(playlist.songCount) || tracks.length,
     tracks,
-  };
+  }, user.platform);
 }
 
 function titleOf(song) {
@@ -105,7 +106,8 @@ function durationOf(song) {
 }
 
 function buildLitePlaylist(request, platform, token, playlistId, tracks) {
-  const songs = normalizedSongs(platform, tracks);
+  // 传入的曲目已经由 getPlaylist 归一化过，这里只做一次廉价过滤，不再整体重映射
+  const songs = (Array.isArray(tracks) ? tracks : []).filter((song) => validSongId(song?.id, platform));
   const targetDuration = Math.max(10, ...songs.map(durationOf));
   const origin = new URL(request.url).origin;
   const prefix = platform === 'qq' ? '/api/qq/song' : '/api/song';
@@ -140,7 +142,7 @@ function allowedAudioUrl(rawUrl, platform) {
 async function songUrl(env, user, songId) {
   const cookie = await decryptCookie(env, user);
   const url = user.platform === 'qq'
-    ? await qqmusic.getSongUrl(songId, cookie, mp3Quality(env.MUSIC_QUALITY))
+    ? await qqmusic.getSongUrl(songId, cookie, mp3Quality(env.MUSIC_QUALITY), 1)
     : await netease.getSongUrl(songId, cookie, env);
   return allowedAudioUrl(url, user.platform);
 }

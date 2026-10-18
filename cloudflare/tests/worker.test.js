@@ -5,13 +5,15 @@ import { DatabaseSync } from 'node:sqlite';
 import CryptoJS from 'crypto-js';
 import worker from '../src/index.js';
 import {
-  PLAY_LOG_DEDUP_MS, PLAY_LOG_MAX_PER_MINUTE, PLAY_LOG_MAX_PER_USER,
+  PLAY_LOG_DEDUP_MS, PLAY_LOG_MAX_PER_MINUTE,
   PLAY_LOG_RETENTION_MS, recordPlayback,
 } from '../src/playback-history.js';
 import {
   createPlaybackToken, createSession, decryptCookie, getPlaybackUser, getSessionUser,
   logout, requireSecret, sha256Hex,
 } from '../src/security.js';
+import { resolvePlayerSource } from '../src/player.js';
+import { recordPlayEvent, recordRequestEvent, routeKey } from '../src/telemetry.js';
 
 function testEnv() {
   const sqlite = new DatabaseSync(':memory:');
@@ -93,7 +95,7 @@ test('new Worker player authorizes before R2, supports ranges, isolates accounts
   for (const { user } of accounts) {
     await env.DB.prepare('INSERT INTO playlists (user_id, playlist_id, name, cover, song_count, songs_json, expires_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .bind(user.id, '123', 'Private playlist', '', 1, JSON.stringify([{ id: '555', name: 'Track', artist: 'Test', duration: 180 }]), Date.now() + 60000).run();
-    const key = await sha256Hex([user.platform, user.id, user.token_hash, '555', 'high'].join(':'));
+    const key = await sha256Hex([user.platform, user.id, '555', 'high'].join(':'));
     await env.DB.prepare('INSERT INTO song_sources (cache_key, source_json, expires_at_ms) VALUES (?, ?, ?)')
       .bind(key, JSON.stringify({ url: 'https://m1.music.126.net/song.mp3', format: 'mp3', bitrate: 320000,
         quality: 'high', resolvedRequestQuality: 'high', trial: false, warnings: [], expiresAt: Date.now() + 60000 }), Date.now() + 60000).run();
@@ -125,8 +127,58 @@ test('new Worker player authorizes before R2, supports ranges, isolates accounts
   await Promise.all(pending);
 });
 
-test('placeholder deployment keys are rejected', () => {
-  assert.throws(() => requireSecret({ ENCRYPTION_KEY: 'your-32-character-secret-key-here' }));
+test('resolve cache uses the Cache API with an absolute URL key and writes no D1 rows', async t => {
+  const env = testEnv();
+  t.after(() => env.sqlite.close());
+  const { user } = await signedInUser(env, 'netease', '1001');
+  const store = new Map();
+  const keys = [];
+  const originalCaches = globalThis.caches;
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    if (originalCaches === undefined) delete globalThis.caches;
+    else globalThis.caches = originalCaches;
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.caches = {
+    default: {
+      async match(key) {
+        keys.push(String(key));
+        const hit = store.get(String(key));
+        return hit ? hit.clone() : undefined;
+      },
+      async put(key, response) { keys.push(String(key)); store.set(String(key), response.clone()); },
+    },
+  };
+  let upstream = 0;
+  globalThis.fetch = async () => {
+    upstream++;
+    return Response.json({
+      code: 200,
+      data: [{ url: 'https://m1.music.126.net/track.mp3', br: 128000, type: 'mp3' }],
+    });
+  };
+  const pending = [];
+  const ctx = { waitUntil(promise) { pending.push(promise); } };
+
+  const first = await resolvePlayerSource(env, user, '555', 'low', false, ctx);
+  await Promise.all(pending);
+  assert.equal(upstream, 1);
+  assert.equal(store.size, 1);
+  assert.equal(env.sqlite.prepare('SELECT COUNT(*) AS count FROM song_sources').get().count, 0);
+  assert.ok(keys.length > 0 && keys.every(key => key.startsWith('https://resolve.mfu.internal/')),
+    'Cache API keys must be absolute URLs');
+
+  const second = await resolvePlayerSource(env, user, '555', 'low', false, ctx);
+  // 缓存往返会丢掉值为 undefined 的字段（如 size），因此断言语义字段而非整体形状
+  assert.equal(second.url, first.url);
+  assert.equal(second.quality, first.quality);
+  assert.equal(second.bitrate, first.bitrate);
+  assert.equal(second.expiresAt, first.expiresAt);
+  assert.equal(upstream, 1, 'a warm resolve must not call the upstream again');
+});
+
+test('placeholder deployment keys are rejected', () => {  assert.throws(() => requireSecret({ ENCRYPTION_KEY: 'your-32-character-secret-key-here' }));
   assert.throws(() => requireSecret({ ENCRYPTION_KEY: 'replace-with-a-random-secret-of-at-least-32-characters' }));
 });
 
@@ -245,8 +297,8 @@ test('favorites and recent history use the signed-in account in D1', async () =>
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `).bind(user.id, '123', 'QQ list', '', 1, '[]', Date.now() + 60000).run();
   await env.DB.prepare(`
-    INSERT INTO play_logs (user_id, playlist_id, song_id, song_name, artist, played_at_ms)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO play_stats (user_id, playlist_id, song_id, song_name, artist, play_count, last_played_at_ms)
+    VALUES (?, ?, ?, ?, ?, 1, ?)
   `).bind(user.id, '123', 'mid1', 'Song', 'Artist', Date.now()).run();
   const recent = await worker.fetch(new Request(`${base}/history/recent`, { headers }), env, ctx);
   const recentBody = await recent.json();
@@ -351,15 +403,20 @@ test('playback logging deduplicates concurrent retries while preserving account 
   const other = (await signedInUser(env, 'qq', '2002')).user;
   const song = { id: '555', name: 'Track', artist: 'Artist' };
   const now = Date.now();
+  const plays = () => env.sqlite.prepare('SELECT COALESCE(SUM(play_count), 0) AS plays FROM play_stats').get().plays;
+  const rows = () => env.sqlite.prepare('SELECT COUNT(*) AS count FROM play_stats').get().count;
   await Promise.all(Array.from({ length: 20 }, () => recordPlayback(env, user.id, '123', song, now)));
-  assert.equal(env.sqlite.prepare('SELECT COUNT(*) AS count FROM play_logs').get().count, 1);
+  assert.equal(plays(), 1);
+  assert.equal(rows(), 1);
   await recordPlayback(env, user.id, '456', song, now);
   await recordPlayback(env, other.id, '123', song, now);
-  assert.equal(env.sqlite.prepare('SELECT COUNT(*) AS count FROM play_logs').get().count, 3);
+  assert.equal(plays(), 3);
+  assert.equal(rows(), 3);
   await recordPlayback(env, user.id, '123', song, now + PLAY_LOG_DEDUP_MS);
-  assert.equal(env.sqlite.prepare('SELECT COUNT(*) AS count FROM play_logs').get().count, 3);
+  assert.equal(plays(), 3);
   await recordPlayback(env, user.id, '123', song, now + PLAY_LOG_DEDUP_MS + 1);
-  assert.equal(env.sqlite.prepare('SELECT COUNT(*) AS count FROM play_logs').get().count, 4);
+  assert.equal(plays(), 4);
+  assert.equal(rows(), 3);
 });
 
 test('logging limits each account to 12 new events in a rolling minute', async t => {
@@ -367,38 +424,38 @@ test('logging limits each account to 12 new events in a rolling minute', async t
   t.after(() => env.sqlite.close());
   const { user } = await signedInUser(env, 'netease', '1001');
   const now = Date.now();
+  const plays = () => env.sqlite.prepare('SELECT COALESCE(SUM(play_count), 0) AS plays FROM play_stats').get().plays;
   for (let index = 0; index < PLAY_LOG_MAX_PER_MINUTE + 3; index++) {
     await recordPlayback(env, user.id, '123', { id: String(index), name: 'Track', artist: '' }, now);
   }
-  assert.equal(env.sqlite.prepare('SELECT COUNT(*) AS count FROM play_logs').get().count, 12);
+  assert.equal(plays(), 12);
   await recordPlayback(env, user.id, '123', { id: '999', name: 'Track', artist: '' }, now + 60001);
-  assert.equal(env.sqlite.prepare('SELECT COUNT(*) AS count FROM play_logs').get().count, 13);
+  assert.equal(plays(), 13);
 });
 
-test('playback history retains at most 1000 records per account and cron removes expired records', async t => {
+test('cron prunes playback stats older than the retention window without touching recent rows', async t => {
   const env = testEnv();
   t.after(() => env.sqlite.close());
   const { user } = await signedInUser(env, 'netease', '1001');
   const other = (await signedInUser(env, 'qq', '2002')).user;
   const now = Date.now();
   const insert = env.sqlite.prepare(
-    'INSERT INTO play_logs (user_id, playlist_id, song_id, played_at_ms) VALUES (?, ?, ?, ?)',
+    'INSERT INTO play_stats (user_id, playlist_id, song_id, play_count, last_played_at_ms) VALUES (?, ?, ?, ?, ?)',
   );
-  for (let index = 0; index < PLAY_LOG_MAX_PER_USER + 8; index++) {
-    insert.run(user.id, '123', String(index), now - (index + 2) * 60000);
-  }
-  insert.run(user.id, '123', 'expired', now - PLAY_LOG_RETENTION_MS - 10000);
-  insert.run(other.id, '456', 'expired', now - PLAY_LOG_RETENTION_MS - 10000);
-  insert.run(other.id, '456', 'recent', now);
+  insert.run(user.id, '123', 'stale', 4, now - PLAY_LOG_RETENTION_MS - 10000);
+  insert.run(user.id, '123', 'fresh', 2, now);
+  insert.run(other.id, '456', 'stale', 1, now - PLAY_LOG_RETENTION_MS - 10000);
+  insert.run(other.id, '456', 'recent', 1, now);
   await recordPlayback(env, user.id, '123', { id: '99999', name: 'New', artist: '' }, now);
-  assert.equal(env.sqlite.prepare('SELECT COUNT(*) AS count FROM play_logs WHERE user_id = ?').get(user.id).count, 1000);
-  assert.equal(env.sqlite.prepare("SELECT COUNT(*) AS count FROM play_logs WHERE user_id = ? AND song_id = 'expired'").get(user.id).count, 0);
-  assert.ok(env.sqlite.prepare("SELECT 1 FROM play_logs WHERE song_id = '99999'").get());
-  assert.equal(env.sqlite.prepare('SELECT COUNT(*) AS count FROM play_logs WHERE user_id = ?').get(other.id).count, 2);
+  assert.equal(env.sqlite.prepare("SELECT COUNT(*) AS count FROM play_stats WHERE song_id = 'stale'").get().count, 2);
+  assert.ok(env.sqlite.prepare("SELECT 1 FROM play_stats WHERE song_id = '99999'").get());
   const tasks = [];
   worker.scheduled({}, env, { waitUntil(task) { tasks.push(task); } });
   await Promise.all(tasks);
-  assert.equal(env.sqlite.prepare('SELECT COUNT(*) AS count FROM play_logs WHERE user_id = ?').get(other.id).count, 1);
+  assert.equal(env.sqlite.prepare("SELECT COUNT(*) AS count FROM play_stats WHERE song_id = 'stale'").get().count, 0);
+  assert.equal(env.sqlite.prepare("SELECT COUNT(*) AS count FROM play_stats WHERE song_id = 'fresh'").get().count, 1);
+  assert.equal(env.sqlite.prepare("SELECT COUNT(*) AS count FROM play_stats WHERE song_id = 'recent'").get().count, 1);
+  assert.equal(env.sqlite.prepare("SELECT play_count AS plays FROM play_stats WHERE song_id = '99999'").get().plays, 1);
 });
 
 test('recent and top history exclude expired events before the daily cleanup runs', async t => {
@@ -406,7 +463,7 @@ test('recent and top history exclude expired events before the daily cleanup run
   t.after(() => env.sqlite.close());
   const { user, token } = await signedInUser(env, 'netease', '1001');
   const insert = env.sqlite.prepare(
-    'INSERT INTO play_logs (user_id, playlist_id, song_id, played_at_ms) VALUES (?, ?, ?, ?)',
+    'INSERT INTO play_stats (user_id, playlist_id, song_id, play_count, last_played_at_ms) VALUES (?, ?, ?, 1, ?)',
   );
   insert.run(user.id, '123', '555', Date.now());
   insert.run(user.id, '456', '666', Date.now() - PLAY_LOG_RETENTION_MS - 10000);
@@ -483,7 +540,7 @@ test('both platforms map lossless to MP3 and record only completed, deduplicated
         assert.deepEqual(received.slice(-media.length), media);
         await Promise.all(tasks);
       }
-      assert.equal(env.sqlite.prepare('SELECT COUNT(*) AS count FROM play_logs WHERE user_id = ?').get(user.id).count, 1);
+      assert.equal(env.sqlite.prepare('SELECT COALESCE(SUM(play_count), 0) AS plays FROM play_stats WHERE user_id = ?').get(user.id).plays, 1);
     }
     assert.ok(qualities.length > 0);
     assert.ok(qualities.every(level => level === 'exhigh'));
@@ -494,4 +551,96 @@ test('both platforms map lossless to MP3 and record only completed, deduplicated
     if (oldQuality === undefined) delete process.env.MUSIC_QUALITY;
     else process.env.MUSIC_QUALITY = oldQuality;
   }
+});
+
+async function seedPlaylist(env, user, playlistId = '123456') {
+  await env.DB.prepare(`
+    INSERT INTO playlists (user_id, playlist_id, name, cover, song_count, songs_json, expires_at_ms)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).bind(user.id, playlistId, 'Test list', '', 1, JSON.stringify([
+    { id: '555', name: 'Track', artist: 'Artist', duration: 200, cover: '' },
+  ]), Date.now() + 60000).run();
+}
+
+test('playlist generation resolves the link in a single request', async t => {
+  const env = testEnv();
+  t.after(() => env.sqlite.close());
+  const { user, token } = await signedInUser(env, 'netease', '1001');
+  await seedPlaylist(env, user);
+  const response = await worker.fetch(new Request('https://music.example.test/api/playlist/generate', {
+    method: 'POST',
+    headers: { 'x-token': token, 'content-type': 'application/json' },
+    body: JSON.stringify({ url: 'https://music.163.com/playlist?id=123456' }),
+  }), env, { waitUntil() {} });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.data.playlist.name, 'Test list');
+  assert.equal(body.data.playlist.songCount, 1);
+  assert.equal(body.data.default, 'lite');
+  assert.match(body.data.url,
+    /^https:\/\/music\.example\.test\/api\/playlist\/m3u8\/[^/]+\/123456\/stream\.m3u8$/);
+  assert.equal(body.data.urls[0].url, body.data.url);
+});
+
+test('shed mode rejects new sessions while issued links keep playing', async t => {
+  const env = testEnv();
+  t.after(() => env.sqlite.close());
+  const { user, token } = await signedInUser(env, 'netease', '1001');
+  await seedPlaylist(env, user);
+  const playbackToken = await createPlaybackToken(env, user, '123456');
+  env.DEGRADE_MODE = 'shed';
+  const ctx = { waitUntil() {} };
+
+  const shed = await worker.fetch(new Request(
+    'https://music.example.test/api/playlist/parse?url=123456', { headers: { 'x-token': token } },
+  ), env, ctx);
+  assert.equal(shed.status, 503);
+  assert.ok(Number(shed.headers.get('retry-after')) > 0);
+
+  // 已经签发的播放链接不受影响
+  const stream = await worker.fetch(new Request(
+    `https://music.example.test/api/playlist/m3u8/${encodeURIComponent(playbackToken)}/123456/stream.m3u8`,
+  ), env, ctx);
+  assert.equal(stream.status, 200);
+  assert.match(await stream.text(), /^#EXTM3U/);
+
+  const health = await worker.fetch(new Request('https://music.example.test/api/health'), env, ctx);
+  assert.equal((await health.json()).degradeMode, 'shed');
+
+  env.DEGRADE_MODE = 'links-only';
+  const capabilities = await worker.fetch(new Request(
+    'https://music.example.test/api/player/capabilities',
+  ), env, ctx);
+  assert.equal((await capabilities.json()).data.degraded, 'links-only');
+});
+
+test('telemetry is optional, sampled and never breaks a request', async () => {
+  const env = testEnv();
+  const request = new Request('https://music.example.test/api/health');
+  // 没有绑定时不抛错，只是不记录
+  assert.equal(recordPlayEvent(env, { platform: 'netease', userId: 1, playlistId: '1', song: { id: '5' } }), false);
+  assert.equal(recordRequestEvent(env, request, new URL(request.url), 200, 5), false);
+
+  const points = [];
+  env.ANALYTICS = { writeDataPoint: point => points.push(point) };
+  env.ANALYTICS_REQUESTS = { writeDataPoint: () => { throw new Error('daily quota exceeded'); } };
+  env.REQUEST_TELEMETRY_SAMPLE = '1';
+
+  assert.equal(recordPlayEvent(env, {
+    platform: 'netease', userId: 1, playlistId: '1', song: { id: '5', name: 'T', artist: 'A' },
+    quality: 'low', format: 'mp3', bitrate: 128000, trial: false, surface: 'hls', cacheState: 'MISS',
+  }), true);
+  assert.equal(points.length, 1);
+  assert.equal(points[0].blobs[0], 'play');
+  assert.equal(points[0].blobs[3], '5');
+  assert.equal(points[0].doubles[2], 128000);
+
+  // 分片与媒体请求已由播放事件覆盖，不再单独记录
+  assert.equal(recordRequestEvent(env, request, new URL('https://music.example.test/api/song/t/5.mp3'), 200, 5), false);
+  assert.equal(recordRequestEvent(env, request, new URL('https://music.example.test/api/player/media/5'), 200, 5), false);
+  // 写入抛错被吞掉，请求不受影响
+  assert.equal(recordRequestEvent(env, request, new URL('https://music.example.test/api/health'), 200, 5), false);
+  assert.equal(routeKey('/api/qq/playlist/m3u8/x/1/stream.m3u8'), 'playlist.stream');
+  assert.equal(routeKey('/api/player/resolve/555'), 'player.resolve');
+  assert.equal(routeKey('/unknown'), 'other');
 });

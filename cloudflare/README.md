@@ -55,18 +55,51 @@ JSON 请求体按实际读取字节限制为 65,536 字节，不依赖 `Content-
 
 - HLS 音频分片完整读取后才计入；HEAD、传输失败和主动取消不计入。直链模式在成功返回音频地址时计入。这些记录不代表已经完整收听。
 - 同一账号、歌单和歌曲在 5 分钟内的重复请求合并为一条；每个账号每分钟最多新增 12 条，超过时仍可播放。
-- 每个账号保留最近 30 天、最多 1,000 条。写入时使用 D1 batch 事务，去重和限额判断在 INSERT 中执行；同时清理该账号过期和超量记录。
-- 最近播放和热门歌曲统计只读取 30 天内保留的记录。每天 UTC 03:17 的 Cron 全站清理过期记录，包括近期未播放的账号。
+- 记录以 `(用户, 歌单, 歌曲)` 聚合存入 `play_stats`：**一次计入的播放只写一行**，重复播放累加 `play_count` 并刷新 `last_played_at_ms`，不再追加事件行。去重与每分钟限额由 INSERT 的 WHERE 守卫判断，被拒的播放不产生任何写入。
+- 保留策略按 `last_played_at_ms` 判断，保留 30 天。最近播放和热门歌曲统计只读取 30 天内的记录。每天 UTC 03:17 的 Cron 全站清理过期记录，同时清理 `playlists`、`song_sources`、`rate_limits` 与 `qr_sessions`。
 
-现有部署升级时先运行 `npm run db:remote` 添加日志索引，再运行 `npm run deploy` 发布新代码和 Cron。`schema.sql` 可重复执行，不清空账号、歌单或收藏。D1 事务和定时任务参考 [D1 batch 文档](https://developers.cloudflare.com/d1/worker-api/d1-database/#batch)与 [Cron Triggers 文档](https://developers.cloudflare.com/workers/configuration/cron-triggers/)。
+这样做的原因：旧实现每次播放执行 3 条语句，其中裁剪语句会扫描 1,000–2,000 行，一次 30 首歌的播放约消耗 **45,000 行读取**，对免费版每天 500 万行只够约 110 次播放。改为聚合后每次播放约 450 行读取、30 行写入。
+
+**升级顺序（重要）**：`npm run db:remote`（建表，幂等）→ `npm run db:backfill`（把旧 `play_logs` 聚合成 `play_stats`，**必须在部署新版 Worker 之前执行一次**）→ `npm run deploy`。`play_logs` 暂时保留以便回填，观察一个版本后可删除。`schema.sql` 可重复执行，不清空账号、歌单或收藏。
+
+### 配额、降级与可观测性
+
+免费版的关键上限：Worker 请求 **10 万/天**、CPU **10 ms/次调用**、D1 行读取 500 万/天、行写入 10 万/天（**超额直接报错**，自 2026-09-01 起）、R2 Class A 100 万/月。静态资源请求由 assets 层直接返回，**不要放宽 `run_worker_first: ["/api/*"]`**，否则静态资源会开始计费。
+
+一次 30 首歌的播放约消耗 31 次 Worker 请求与 30 次 D1 写入，因此免费版的实际上限约 **3,200 次播放/天**，请求数、D1 写入与 AE 数据点同时卡在这个数量级。
+
+| 变量 | 作用 | 默认值 |
+| --- | --- | --- |
+| `DEGRADE_MODE` | `normal` / `links-only` / `shed` | `normal` |
+| `AUDIO_CACHE_FILL_RATE` | R2 缓存填充抽样比例，额度吃紧时降低 | `1` |
+| `RESOLVE_CACHE` | `cache_api` 或 `d1`；无 Cache API 时自动回退 | `cache_api` |
+| `PLAYLIST_TRACK_CAP` | 单歌单解析上限，防止超大歌单 JSON 超出 10 ms CPU | `1000` |
+| `REQUEST_TELEMETRY_SAMPLE` | 控制面请求遥测抽样比例 | `10` |
+| `DEPLOY_VERSION` | 写入遥测的版本标记 | 空 |
+
+降级优先级是刻意的：额度是硬上限，一旦耗尽所有人都播不了，所以余量优先留给已经在看的人。`links-only` 通过 `/api/player/capabilities` 的 `degraded` 字段让前端隐藏站内播放器（每首歌 2 次请求降到 1 次）；`shed` 只让 `/playlist/parse`、`/playlist/url`、`/playlist/generate` 返回 503 与 `Retry-After`，**已签发的 M3U8 链接继续可用**。
+
+遥测写入 Analytics Engine 的 `mfu_playback`（每次计入的播放一个数据点）与 `mfu_requests`（控制面请求，默认 1/10 抽样，媒体与分片请求不记）。**AE 不承载正确性**：绑定缺失、写入失败或超额都只影响分析数据，UI 读取一律走 D1。在 Dashboard 关注 Requests/day、CPU p50/p99、D1 Rows read/written 与 **R2 Class A**（冷播放每次歌单产生 30 次填充写入，未加护栏时月度额度会在月初被打满）。
+
+`/api/health` 返回 `{ status, degradeMode, version, features }`，可接入外部免费探活监控。建议同时为请求数、错误率、D1 读写与 R2 Class A 配置 Dashboard 通知。
+
+### 音源解析缓存
+
+音源地址只活 90 秒，放进 D1 会让每次解析都产生一次写入。改为写入 Cache API（键为 `https://resolve.mfu.internal/<sha256>`，**必须是绝对 URL**，裸哈希会被 Cache API 拒绝），命中时零 D1 读写。缓存键只到账号维度：`token_hash` 会在重新登录或退出时轮换，把它写进键里会让整个缓存失效。没有 Cache API 的环境（例如 `node --test`）自动回退到 `song_sources` 表。
 
 ## 工作台界面
 
-左侧导航统一提供链接生成、我的音乐、视频预览、账号管理和关于页面。窄屏显示紧凑导航；页面、面板与导航指示器继续由 GSAP 统一控制，并响应系统的减少动态效果设置。
+Cloudflare 版前端位于仓库根目录的 `web/`：**React + Vite + Tailwind + shadcn/ui**，构建产物 `web/dist` 由 Worker 的 `assets` 绑定提供。静态资源请求由 assets 层直接返回、不计入 Worker 请求数，因此前端体积不影响免费额度，只影响首屏速度。视图按路由分包，`hls.js` 只在预览页真正打开 HLS 源时才按需加载。
 
-账号管理连接两个平台的现有登录状态，每个平台保留一个当前登录账号。可以重新登录以切换账号、选择常用平台、退出登录，并保存本机名称和备注。名称和备注以平台及账号 ID 为键保存到浏览器；不会修改音乐平台资料，也不跨设备同步。
+左侧导航统一提供链接生成、我的音乐、媒体预览、账号管理和关于页面。窄屏显示紧凑导航；页面、列表、分段控件与弹窗由 `motion`（framer-motion）控制，并响应系统的减少动态效果设置，详见[动画说明](ANIMATION.md)。界面延续天蓝与白色调色板与亮暗主题，但改用实色卡片、1px 边框与 2px 小圆角，不再使用玻璃拟态。
 
-预览支持 HTTPS 媒体直链和本地视频／音频文件。M3U8 优先使用同站点打包的 Hls.js，不支持 MediaSource 的浏览器回退到原生 HLS；生成结果提供预览入口。外部 HLS 源需要允许跨域请求；本地文件使用 Object URL，不会上传，离开预览页时销毁播放器并释放资源。关于页面的版本信息从构建生成的 `app-meta.json` 读取。
+账号管理连接两个平台的现有登录状态，每个平台保留一个当前登录账号。可以重新登录以切换账号、选择常用平台、退出登录，并保存本机名称和备注。名称和备注以平台及账号 ID 为键保存到浏览器；不会修改音乐平台资料，也不跨设备同步。新前端保留了旧版全部 `localStorage` 键（`token`、`qqToken`、`theme`、`generatorPlatform`、`personalPlatformTab`、`mfu:player-quality`、`mfu:account:<platform>:<userId>`），因此升级不会让已登录用户掉线。
+
+预览支持 HTTPS 媒体直链和本地视频／音频文件，以及粘贴本站生成的 `stream.m3u8` 链接。本站歌单由页面底部的常驻播放器控制，切换路由不会中断播放。本地文件使用 Object URL，不会上传。
+
+**回滚**：把 `wrangler.jsonc` 的 `assets.directory` 改回 `"../public"` 并重新部署即可回到旧前端；`public/` 目录保持冻结、未被修改。
+
+`public/` 与 `public/js/vendor/` 现在只服务冻结的 Node.js 版前端，同步脚本保留为 `npm run build:vendor`。
 
 ## 本地验证
 

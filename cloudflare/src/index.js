@@ -11,6 +11,8 @@ import {
   adapter, buildLitePlaylist, getPlaylist, parsePlaylistId, songUrl,
   validPlaylistId, validSongId,
 } from './playlists.js';
+import { recordPlayEvent, recordRequestEvent } from './telemetry.js';
+import { degradeMode, secondsUntilUtcMidnight } from './degrade.js';
 
 const QR_TTL_MS = 3 * 60 * 1000;
 const MAX_REQUEST_BODY_BYTES = 65536;
@@ -78,14 +80,24 @@ async function rateLimited(env, request, scope, maxHits) {
     ON CONFLICT (scope, key_hash, bucket) DO UPDATE SET hits = hits + 1
     RETURNING hits
   `).bind(scope, key, bucket).first();
-  if (Math.random() < 0.001) {
-    await env.DB.prepare('DELETE FROM rate_limits WHERE bucket < ?').bind(bucket - 1440).run();
-  }
   return Number(result?.hits || 0) > maxHits;
 }
 
 async function requireUser(env, request, platform, url) {
   return getSessionUser(env, request, platform, url);
+}
+
+function playlistUrlPayload(origin, platform, token, playlistId) {
+  const prefix = platform === 'qq' ? '/api/qq/playlist' : '/api/playlist';
+  const liteUrl = `${origin}${prefix}/m3u8/${encodeURIComponent(token)}/${playlistId}/stream.m3u8`;
+  return {
+    url: liteUrl,
+    urls: [{
+      type: 'lite', label: '轻量 M3U8（仅音频）', url: liteUrl,
+      note: '无需本地转码。播放能力取决于播放器与账号权限。',
+    }],
+    default: 'lite',
+  };
 }
 
 async function saveLogin(env, platform, profile, cookie, code) {
@@ -226,6 +238,14 @@ async function playlistRoute(request, env, platform, path, url) {
   const user = await requireUser(env, request, platform, url);
   if (!user) return fail('请先登录', 401);
 
+  // 额度耗尽时只拒新会话，已签发的播放链接不受影响
+  const shed = (routePath) => ['/parse', '/url', '/generate'].includes(routePath)
+    && degradeMode(env) === 'shed';
+  if (shed(path)) {
+    return json({ success: false, message: '今日额度已用完，请在 00:00 UTC 后重试' }, 503,
+      { 'retry-after': String(secondsUntilUtcMidnight()) });
+  }
+
   if (request.method === 'GET' && path === '/user') {
     const cookie = await decryptCookie(env, user);
     const result = await adapter(platform).getUserPlaylists(user.platform_user_id, cookie);
@@ -252,15 +272,24 @@ async function playlistRoute(request, env, platform, path, url) {
     if (!validPlaylistId(playlistId)) return fail('无效的歌单 ID');
     await getPlaylist(env, user, playlistId);
     const token = await createPlaybackToken(env, user, playlistId);
-    const prefix = platform === 'qq' ? '/api/qq/playlist' : '/api/playlist';
-    const liteUrl = `${url.origin}${prefix}/m3u8/${encodeURIComponent(token)}/${playlistId}/stream.m3u8`;
+    return json({ success: true, data: playlistUrlPayload(url.origin, platform, token, playlistId) });
+  }
+
+  // 一次请求完成解析 → 取歌单 → 签发令牌 → 返回链接，替代前端连续调用 /parse 与 /url
+  if (request.method === 'POST' && path === '/generate') {
+    if (await rateLimited(env, request, `${platform}:parse`, 30)) {
+      return fail('解析请求过于频繁', 429);
+    }
+    const body = await bodyJson(request);
+    const playlistId = parsePlaylistId(body.url, platform);
+    if (!playlistId) return fail('无效的歌单链接或 ID');
+    const playlist = await getPlaylist(env, user, playlistId);
+    const token = await createPlaybackToken(env, user, playlistId);
     return json({ success: true, data: {
-      url: liteUrl,
-      urls: [{
-        type: 'lite', label: '轻量 M3U8（仅音频）', url: liteUrl,
-        note: '无需本地转码。播放能力取决于播放器与账号权限。',
-      }],
-      default: 'lite',
+      playlist: {
+        id: playlist.id, name: playlist.name, cover: playlist.cover, songCount: playlist.songCount,
+      },
+      ...playlistUrlPayload(url.origin, platform, token, playlistId),
     } });
   }
 
@@ -292,23 +321,30 @@ async function playbackRoute(request, env, ctx, platform, path, url) {
     const playlist = await getPlaylist(env, user, playlistId);
     const song = playlist.tracks.find((track) => String(track.id) === songId);
     if (!song) return fail('歌曲不属于该歌单', 403);
-    const resource = await resolvePlayerSource(env, user, songId, url.searchParams.get('quality') || env.MUSIC_QUALITY || 'low');
+    const resource = await resolvePlayerSource(env, user, songId, url.searchParams.get('quality') || env.MUSIC_QUALITY || 'low', false, ctx);
     const destination = resource.url;
     if (!destination) return fail('歌曲不可播放，可能无版权或需要对应会员权限', 404);
-    const record = () => ctx.waitUntil(recordPlayback(env, user.id, playlistId, song)
+    const record = (cacheState = '') => ctx.waitUntil(recordPlayback(env, user.id, playlistId, song)
+      .then(() => recordPlayEvent(env, {
+        platform, userId: user.id, playlistId, song, quality: resource.quality,
+        format: resource.format, bitrate: resource.bitrate, trial: resource.trial,
+        surface: 'hls', cacheState, colo: request.cf?.colo,
+      }))
       .catch(error => console.error('[Playback history]', error)));
     if (url.searchParams.get('hls') === '1') {
+      let cacheState = '';
       const fetchAudio = (input, options) => proxyPlayerSource(new Request(input, options),
-        env, ctx, user, songId, resource, false, request.method !== 'HEAD');
+        env, ctx, user, songId, resource, false, request.method !== 'HEAD')
+        .then((response) => { cacheState = response.headers.get('x-mfu-cache') || ''; return response; });
       return packedAudioResponse(request, destination, platform, fetchAudio,
-        request.method === 'GET' ? record : undefined);
+        request.method === 'GET' ? () => record(cacheState) : undefined);
     }
     const response = new Response(null, { status: 302, headers: {
       location: destination,
       'cache-control': 'no-store',
       'access-control-allow-origin': '*',
     } });
-    if (request.method === 'GET') record();
+    if (request.method === 'GET') record('BYPASS');
     return response;
   }
 
@@ -383,17 +419,17 @@ async function historyRoute(request, env, platform, path, url) {
     const limit = numberParam(url.searchParams.get('limit'), 20, 100) || 20;
     const offset = numberParam(url.searchParams.get('offset'), 0, 100000);
     const rows = await env.DB.prepare(`
-      SELECT l.playlist_id, MAX(l.played_at_ms) AS played_at_ms,
-        COUNT(*) AS play_count, COALESCE(MAX(p.name), '') AS playlist_name,
+      SELECT s.playlist_id, MAX(s.last_played_at_ms) AS played_at_ms,
+        SUM(s.play_count) AS play_count, COALESCE(MAX(p.name), '') AS playlist_name,
         COALESCE(MAX(p.cover), '') AS playlist_cover
-      FROM play_logs l LEFT JOIN playlists p
-        ON p.user_id = l.user_id AND p.playlist_id = l.playlist_id
-      WHERE l.user_id = ? AND l.playlist_id IS NOT NULL AND l.played_at_ms >= ?
-      GROUP BY l.playlist_id ORDER BY played_at_ms DESC LIMIT ? OFFSET ?
+      FROM play_stats s LEFT JOIN playlists p
+        ON p.user_id = s.user_id AND p.playlist_id = s.playlist_id
+      WHERE s.user_id = ? AND s.last_played_at_ms >= ?
+      GROUP BY s.playlist_id ORDER BY played_at_ms DESC LIMIT ? OFFSET ?
     `).bind(user.id, cutoff, limit, offset).all();
     const count = await env.DB.prepare(`
-      SELECT COUNT(DISTINCT playlist_id) AS total FROM play_logs
-      WHERE user_id = ? AND playlist_id IS NOT NULL AND played_at_ms >= ?
+      SELECT COUNT(DISTINCT playlist_id) AS total FROM play_stats
+      WHERE user_id = ? AND last_played_at_ms >= ?
     `).bind(user.id, cutoff).first();
     return json({ success: true, data: rows.results.map((row) => ({
       playlistId: row.playlist_id,
@@ -408,7 +444,7 @@ async function historyRoute(request, env, platform, path, url) {
     const limit = numberParam(url.searchParams.get('limit'), 10, 50) || 10;
     const rows = await env.DB.prepare(`
       SELECT song_id, MAX(song_name) AS song_name, MAX(artist) AS artist,
-        COUNT(*) AS play_count FROM play_logs WHERE user_id = ? AND played_at_ms >= ?
+        SUM(play_count) AS play_count FROM play_stats WHERE user_id = ? AND last_played_at_ms >= ?
       GROUP BY song_id ORDER BY play_count DESC LIMIT ?
     `).bind(user.id, cutoff, limit).all();
     return json({ success: true, data: rows.results.map((row) => ({
@@ -421,7 +457,15 @@ async function historyRoute(request, env, platform, path, url) {
 async function api(request, env, ctx) {
   const url = new URL(request.url);
   const pathname = url.pathname;
-  if (pathname === '/api/health') return json({ status: 'ok', timestamp: Date.now() });
+  if (pathname === '/api/health') {
+    return json({
+      status: 'ok',
+      timestamp: Date.now(),
+      degradeMode: degradeMode(env),
+      version: String(env.DEPLOY_VERSION || ''),
+      features: { analytics: !!(env.ANALYTICS || env.ANALYTICS_REQUESTS), audioCache: !!env.AUDIO_CACHE },
+    });
+  }
   if (!env.DB) return fail('未绑定 D1 数据库', 503);
   requireSecret(env);
   if (pathname.startsWith('/api/player/')) return handlePlayer(request, env, ctx);
@@ -451,15 +495,31 @@ async function api(request, env, ctx) {
 
 export default {
   scheduled(_event, env, ctx) {
-    ctx.waitUntil(prunePlaybackLogs(env));
-    ctx.waitUntil(env.DB.prepare('DELETE FROM song_sources WHERE expires_at_ms < ?').bind(Date.now()).run());
+    // 清理全部走索引；play_stats 的保留策略由 prunePlaybackLogs 负责
+    const now = Date.now();
+    const purges = [
+      prunePlaybackLogs(env),
+      env.DB.prepare('DELETE FROM playlists WHERE expires_at_ms < ?').bind(now).run(),
+      env.DB.prepare('DELETE FROM song_sources WHERE expires_at_ms < ?').bind(now).run(),
+      env.DB.prepare('DELETE FROM rate_limits WHERE bucket < ?')
+        .bind(Math.floor(now / 60000) - 1440).run(),
+      env.DB.prepare('DELETE FROM qr_sessions WHERE expires_at_ms <= ?').bind(now).run(),
+    ];
+    ctx.waitUntil(Promise.all(purges).then((results) => {
+      const removed = results.slice(1).reduce((total, result) => total + (result?.meta?.changes || 0), 0);
+      console.log(`[Cron] pruned ${removed} expired rows`);
+    }));
   },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
+    const startedAt = Date.now();
     try {
-      return await api(request, env, ctx);
+      const response = await api(request, env, ctx);
+      recordRequestEvent(env, request, url, response.status, Date.now() - startedAt);
+      return response;
     } catch (error) {
+      recordRequestEvent(env, request, url, error.status || 500, Date.now() - startedAt);
       if (error instanceof RequestBodyTooLargeError) return fail('请求体不能超过 64 KiB', 413);
       if (Number.isInteger(error.status) && error.status >= 400 && error.status <= 599) return fail(error.message, error.status);
       console.error('[API]', error);

@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MusicForUrl</title>
+  <meta name="description" content="网易云音乐与 QQ 音乐歌单转换为播放链接。">
+  <meta name="theme-color" content="#e5f6ff">
+  <link rel="icon" href="/brand.svg" type="image/svg+xml">
+  <script>
+    // 在首屏渲染前套用主题，避免闪烁。localStorage 键与旧版前端完全一致。
+    try {
+      var theme = localStorage.getItem('theme');
+      if (theme === 'dark') document.documentElement.dataset.theme = 'dark';
+      if (theme === 'light') document.documentElement.dataset.theme = 'light';
+    } catch (_) {}
+  </script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+</html>

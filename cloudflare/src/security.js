@@ -27,10 +27,21 @@ function fromBase64Url(value) {
   return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 }
 
+const keyCache = new Map();
+
 async function deriveKey(env, purpose, algorithm, usages) {
-  const seed = encoder.encode(`MusicForUrl:${purpose}:${requireSecret(env)}`);
+  const secret = requireSecret(env);
+  // 派生键在 isolate 内按用途/算法/权限缓存，避免每个请求重算 SHA-256 与 importKey
+  const cacheKey = `${secret}\u0000${purpose}\u0000${algorithm.name}\u0000${algorithm.hash || ''}\u0000${usages.join(',')}`;
+  const cached = keyCache.get(cacheKey);
+  if (cached) return cached;
+  const seed = encoder.encode(`MusicForUrl:${purpose}:${secret}`);
   const bytes = await crypto.subtle.digest('SHA-256', seed);
-  return crypto.subtle.importKey('raw', bytes, algorithm, false, usages);
+  const promise = crypto.subtle.importKey('raw', bytes, algorithm, false, usages)
+    .catch((error) => { keyCache.delete(cacheKey); throw error; });
+  keyCache.set(cacheKey, promise);
+  if (keyCache.size > 32) keyCache.delete(keyCache.keys().next().value);
+  return promise;
 }
 
 async function sha256Hex(value) {

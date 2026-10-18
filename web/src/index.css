@@ -1,0 +1,113 @@
+@import "tailwindcss";
+
+/* 用 data-theme 而不是 shadcn 默认的 .dark 类，这样 localStorage 键与
+   documentElement.dataset.theme 与旧版前端完全一致，现有用户的主题偏好继续生效。 */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+:root {
+  /* 明确要求：不要大圆角。所有 shadcn 组件的圆角都派生自 --radius。 */
+  --radius: 0.125rem;
+
+  --background: #f4fbff;
+  --foreground: #23485f;
+  --card: #ffffff;
+  --card-foreground: #23485f;
+  --popover: #ffffff;
+  --popover-foreground: #23485f;
+  --primary: #2f9fd0;
+  --primary-foreground: #ffffff;
+  --secondary: #e6f5fd;
+  --secondary-foreground: #214b65;
+  --muted: #e6f5fd;
+  --muted-foreground: #547186;
+  --accent: #d8ecf7;
+  --accent-foreground: #214b65;
+  --destructive: #c2453f;
+  --destructive-foreground: #ffffff;
+  --success: #2f8f5b;
+  --border: #d8ecf7;
+  --input: #d8ecf7;
+  --ring: #2f9fd0;
+}
+
+[data-theme="dark"] {
+  --background: #10222f;
+  --foreground: #effaff;
+  --card: #17344a;
+  --card-foreground: #effaff;
+  --popover: #17344a;
+  --popover-foreground: #effaff;
+  --primary: #63bfe8;
+  --primary-foreground: #08202c;
+  --secondary: #1d3a4e;
+  --secondary-foreground: #effaff;
+  --muted: #1d3a4e;
+  --muted-foreground: #a9c9da;
+  --accent: #24485e;
+  --accent-foreground: #effaff;
+  --destructive: #e2685f;
+  --destructive-foreground: #1a0d0c;
+  --success: #5fc98d;
+  --border: #2a4d64;
+  --input: #2a4d64;
+  --ring: #63bfe8;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* 全部收敛到 --radius，避免出现大圆角 */
+  --radius-sm: var(--radius);
+  --radius-md: var(--radius);
+  --radius-lg: var(--radius);
+  --radius-xl: var(--radius);
+  --radius-2xl: var(--radius);
+}
+
+@layer base {
+  * { border-color: var(--border); }
+
+  html, body, #root { height: 100%; }
+
+  body {
+    margin: 0;
+    background-color: var(--background);
+    color: var(--foreground);
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+  ::selection { background: color-mix(in srgb, var(--primary) 35%, transparent); }
+}
+
+/* 减少动态效果：既有系统的偏好，也有旧前端写入的 dataset.motion 标志 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+[data-motion="reduced"] *, [data-motion="reduced"] *::before, [data-motion="reduced"] *::after {
+  animation-duration: 0.001ms !important;
+  transition-duration: 0.001ms !important;
+}

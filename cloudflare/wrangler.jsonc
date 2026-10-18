@@ -7,6 +7,10 @@
   "vars": {
     "AUDIO_CACHE_ENABLED": "true"
   },
+  "analytics_engine_datasets": [
+    { "binding": "ANALYTICS", "dataset": "mfu_playback" },
+    { "binding": "ANALYTICS_REQUESTS", "dataset": "mfu_requests" }
+  ],
   "r2_buckets": [
     { "binding": "AUDIO_CACHE", "bucket_name": "music-for-url-private-cache" }
   ],
@@ -27,7 +31,7 @@
     "mode": "smart"
   },
   "assets": {
-    "directory": "../public",
+    "directory": "../web/dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*"]

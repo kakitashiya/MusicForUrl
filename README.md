@@ -23,8 +23,8 @@
 - 网易云支持扫码、手机验证码、密码和 Cookie 登录；QQ 音乐提供扫码登录。
 - 每个平台保留一个当前登录账号。账号名称和备注按“平台 + 账号 ID”存储在当前浏览器，不修改音乐平台昵称，也不跨设备同步。
 - 收藏、最近播放和服务端账号信息存入 D1；平台 Cookie 使用 AES-GCM 加密。
-- 界面采用左侧导航与右侧内容区，主色为天蓝与白色，使用半透明玻璃容器；窄屏显示紧凑导航。
-- 页面、Tab 滑块、列表、弹窗、按钮与亮暗主题切换统一使用 **GSAP**，主题变色 360ms，支持系统的“减少动态效果”设置。实现位置与参数见[动画说明](cloudflare/ANIMATION.md)。
+- 界面采用左侧导航与右侧内容区，主色为天蓝与白色，使用实色卡片与 2px 小圆角；窄屏显示紧凑导航。
+- 前端为 React + Vite + Tailwind + shadcn/ui，页面、列表、分段控件与弹窗使用 **motion（framer-motion）**，支持系统的“减少动态效果”设置。实现位置与参数见[动画说明](cloudflare/ANIMATION.md)。
 
 ## 音质、封面与性能
 
@@ -52,7 +52,7 @@ Node 同一开关启用最多 256 MiB 的私有磁盘缓存，可配置 `PLAYER_
 
 本地文件仅通过浏览器 Object URL 预览，不上传到服务器。M3U8 优先使用本站打包的 Hls.js；不支持 MediaSource 的浏览器尝试原生 HLS。外部 HLS 源必须允许跨域请求。
 
-最近播放按有效媒体请求记录：HLS 分片完整传输后计入，直链模式在返回播放地址后计入；不代表已经完整收听。相同账号、歌单和歌曲在 5 分钟内合并，每个账号每分钟最多新增 12 条，保留最近 30 天且最多 1,000 条。后台每天清理过期数据，详见[播放历史说明](cloudflare/README.md#播放历史与保留)。
+最近播放按有效媒体请求记录：HLS 分片完整传输后计入，直链模式在返回播放地址后计入；不代表已经完整收听。相同账号、歌单和歌曲在 5 分钟内合并，每个账号每分钟最多新增 12 条，保留最近 30 天；记录按账号、歌单和歌曲聚合成一行，重复播放只累加计数。后台每天清理过期数据，详见[播放历史说明](cloudflare/README.md#播放历史与保留)。
 
 ## 播放与兼容性
 
@@ -76,10 +76,14 @@ VRChat 公开 / 群组公开房间需要世界作者将媒体域名加入 `Video
 
 ```powershell
 git clone --branch master https://github.com/znc15/MusicForUrl.git
-cd MusicForUrl/cloudflare
+cd MusicForUrl/web
+npm ci
+cd ../cloudflare
 npm ci
 Copy-Item .dev.vars.example .dev.vars
 ```
+
+前端与 Worker 是两套依赖：`web/` 产出静态资源，`cloudflare/` 运行 Worker。`cloudflare` 的 `predev` / `predeploy` 会自动先构建 `web/`，所以改完前端直接运行下面的命令即可。
 
 将 `.dev.vars` 中的 `ENCRYPTION_KEY` 替换为独立的至少 32 字符随机密钥，占位值会被拒绝。可以用下面的命令生成一个 64 字符十六进制密钥，再填入文件：
 
@@ -149,7 +153,7 @@ npm run deploy
 
 该命令自动构建静态依赖，并保留已有 Secret。部署后检查 `/api/health`，再验证登录、生成链接和预览播放。
 
-升级先备份 D1，执行 `npm run db:remote` 添加索引和 `song_sources`，再执行 `npm run deploy`。脚本可重复执行，不清空账号或收藏。Cron 每天 UTC 03:17 清理过期记录与音源元数据。新账号还需创建 R2 桶并修改绑定；不启用时删除绑定并设 `AUDIO_CACHE_ENABLED=false`，参阅 [Cloudflare 文档](cloudflare/README.md#私有-r2-缓存)。
+升级先备份 D1，按顺序执行 `npm run db:remote`（建表，幂等）→ `npm run db:backfill`（**仅首次升级需要，且必须在部署新版 Worker 之前**，把旧的逐事件播放记录聚合成 `play_stats`）→ `npm run deploy`。脚本可重复执行，不清空账号或收藏。Cron 每天 UTC 03:17 清理过期记录与音源元数据。新账号还需创建 R2 桶并修改绑定；不启用时删除绑定并设 `AUDIO_CACHE_ENABLED=false`，参阅 [Cloudflare 文档](cloudflare/README.md#私有-r2-缓存)。
 
 ### 3. 可选配置与自定义域名
 
@@ -166,25 +170,25 @@ npm run deploy
 ## 项目结构
 
 ```text
+web/                    Cloudflare 版前端（React + Vite + Tailwind + shadcn/ui）
+  src/views/            链接生成、我的音乐、媒体预览、账号管理、关于
+  src/components/       外壳、登录弹窗、常驻播放器与 UI 组件
+  src/motion/           motion（framer-motion）动画原语
+  src/lib/              API 客户端、本地存储、纯函数规则
 cloudflare/
   src/                 Worker API、网易云适配、认证和音频流处理
+  migrations/          一次性数据迁移（播放历史聚合回填）
   schema.sql           D1 表结构
-  scripts/             同步 GSAP、Hls.js 与构建版本信息
+  scripts/             为冻结的 Node 版前端同步 GSAP 与 Hls.js
   tests/               Cloudflare 版本回归测试
   wrangler.jsonc       Worker、静态资源、D1 与域名配置
-public/
-  views/               链接生成、音乐、预览、账号、关于页面
-  includes/            侧边栏、登录弹窗等公共模板
-  js/main.js           路由与音乐业务
-  js/workspace.js      导航、账号偏好与媒体预览
-  js/motion.js         统一 GSAP 动画
-  js/vendor/           本站托管的浏览器依赖
-lib/qqmusic.js          QQ 音乐适配
+public/                冻结的旧前端，仅由 Node.js 版继续使用
+lib/qqmusic.js          QQ 音乐适配（两个运行时共用）
 server.js / routes/     保留的 Node.js 服务端
 deploy/                保留的 Docker 部署文件
 ```
 
-旧版 SQLite 数据不会自动迁移到 D1，需要重新登录；收藏和最近播放从新数据库开始。平台接口可能随上游更新或风控变化而失效。
+Node 版前端已冻结：新功能只做在 `web/`，`public/` 仅随 Node.js / Docker 部署继续提供服务。旧版 SQLite 数据不会自动迁移到 D1，需要重新登录；收藏和最近播放从新数据库开始。平台接口可能随上游更新或风控变化而失效。
 
 ## 文档与反馈
 

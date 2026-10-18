@@ -1,5 +1,7 @@
 # MusicForUrl · Node.js / Docker
 
+> **状态：冻结。** 新功能只做在 Cloudflare 版（`cloudflare/` + `web/`）。本页描述的自有服务器部署继续可用，但前端仍是 `public/` 里的旧版界面，且不会获得新功能与配额优化。
+
 自有服务器与 Cloudflare 版本共用工作台、账号管理和 `/api/player/*` 播放器接口。本文保留原有 FFmpeg 与 Docker 功能说明。下面的命令均在仓库根目录执行；两种部署差异见[部署指南](website/guide/deployment.md)。
 
 ## 新版逐首播放器

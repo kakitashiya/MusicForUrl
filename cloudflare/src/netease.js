@@ -51,12 +51,18 @@ function aesEncrypt(text, key, mode, iv = '') {
   return mode === 'ECB' ? encrypted.ciphertext.toString().toUpperCase() : encrypted.toString();
 }
 
+// PEM 解析（ASN.1 + BigInteger）开销明显，模块内只做一次
+let cachedPublicKey = null;
+function publicKey() {
+  return (cachedPublicKey ||= forge.pki.publicKeyFromPem(PUBLIC_KEY));
+}
+
 function weapiForm(data) {
   const random = crypto.getRandomValues(new Uint8Array(16));
   const secret = Array.from(random, (byte) => BASE62[byte % BASE62.length]).join('');
   const first = aesEncrypt(JSON.stringify(data), PRESET_KEY, 'CBC', IV);
   const params = aesEncrypt(first, secret, 'CBC', IV);
-  const encrypted = forge.pki.publicKeyFromPem(PUBLIC_KEY).encrypt(secret.split('').reverse().join(''), 'NONE');
+  const encrypted = publicKey().encrypt(secret.split('').reverse().join(''), 'NONE');
   return new URLSearchParams({ params, encSecKey: forge.util.bytesToHex(encrypted) });
 }
 
@@ -188,9 +194,18 @@ async function getUserPlaylists(userId, cookie) {
   return { playlists, count: result.body.playlistCount ?? playlists.length };
 }
 
-async function getPlaylistDetail(playlistId, cookie) {
+// 免费版每次调用只有 10 ms CPU，而 n:100000 会让超大歌单返回数 MB JSON，
+// 光解析就超预算。上限之内的歌单行为完全不变，超过上限时截断并留下告警。
+const DEFAULT_TRACK_CAP = 1000;
+
+function trackCap(env) {
+  const value = Number(env?.PLAYLIST_TRACK_CAP);
+  return Number.isInteger(value) && value > 0 ? Math.min(value, 10000) : DEFAULT_TRACK_CAP;
+}
+
+async function getPlaylistDetail(playlistId, cookie, env) {
   const result = await requestNetease('/api/v6/playlist/detail', {
-    id: playlistId, n: 100000, s: 8,
+    id: playlistId, n: trackCap(env), s: 8,
   }, { cookie });
   const playlist = result.body?.playlist;
   if (result.body?.code !== 200 || !playlist) {
@@ -203,6 +218,9 @@ async function getPlaylistDetail(playlistId, cookie) {
     duration: duration(track),
     cover: track.al?.picUrl || track.album?.picUrl || '',
   }));
+  if (Number(playlist.trackCount) > tracks.length) {
+    console.warn(`[Playlist] truncated ${playlist.id}: ${tracks.length}/${playlist.trackCount}`);
+  }
   return {
     id: playlist.id,
     name: playlist.name || '',
