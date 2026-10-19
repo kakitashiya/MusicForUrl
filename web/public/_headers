@@ -1,9 +1,20 @@
-# Vite 产物带内容哈希，可以永久缓存；HTML 保持默认的 max-age=0 以尽快拿到新入口。
+# 顺序与 `!` 都有讲究：_headers 的规则按文件顺序应用，后面的规则先 detach 同名头再写入，
+# 所以通配规则放最前，具体路径放最后并显式 detach，避免两个 max-age 被逗号拼在一起。
+#
+# 其余路径都是 HTML（含 SPA 回退）：no-transform 让 Cloudflare 边缘不改写页面，
+# 因此不会注入 Web Analytics 的 beacon.min.js。本站统计走自己的 Analytics Engine。
+/*
+  Cache-Control: public, max-age=0, must-revalidate, no-transform
+
+# Vite 产物带内容哈希，可以永久缓存。
 /assets/*
+  ! Cache-Control
   Cache-Control: public, max-age=31536000, immutable
 
 /brand.svg
+  ! Cache-Control
   Cache-Control: public, max-age=86400
 
 /placeholder.svg
+  ! Cache-Control
   Cache-Control: public, max-age=86400

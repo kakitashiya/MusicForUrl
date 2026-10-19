@@ -111,6 +111,8 @@ Cloudflare 版前端位于仓库根目录的 `web/`：**React + Vite + Tailwind 
 
 字体使用 **HarmonyOS Sans SC**，字库由 `cn-font-split` 按 `unicode-range` 切成多个 woff2 子集（只引入 400 / 500 / 600 三档），浏览器按页面实际用字下载，并带 `font-display: swap` 避免首屏空白。构建脚本用 `cross-env` 强制 `NODE_ENV=production`，避免误打开发版 React；首页直接进入主包，其余路由、播放条与登录弹窗按需加载，依赖拆成 react、radix、sonner、icons 等长缓存块。
 
+`web/public/_headers` 负责静态资源的缓存策略：`/assets/*`（带内容哈希）永久缓存，其余路径（HTML 与 SPA 回退）为 `max-age=0, must-revalidate` 并额外带 **`no-transform`**——最后一个指令让 Cloudflare 边缘不改写 HTML，从而不会自动注入 Web Analytics 的 `beacon.min.js`（本站统计走自己的 Analytics Engine，不需要它）。注意 `_headers` 的规则按文件顺序应用，后面的规则会覆盖同名头，所以通配规则写在最前、具体路径写在最后，否则两个 `max-age` 会被逗号拼成无效值。
+
 账号管理连接两个平台的现有登录状态，每个平台保留一个当前登录账号。可以重新登录以切换账号、选择常用平台、退出登录，并保存本机名称和备注。名称和备注以平台及账号 ID 为键保存到浏览器；不会修改音乐平台资料，也不跨设备同步。新前端保留了旧版全部 `localStorage` 键（`token`、`qqToken`、`theme`、`generatorPlatform`、`personalPlatformTab`、`mfu:player-quality`、`mfu:account:<platform>:<userId>`），因此升级不会让已登录用户掉线。
 
 预览支持 HTTPS 媒体直链和本地视频／音频文件，以及粘贴本站生成的 `stream.m3u8` 链接。本站歌单由页面底部的常驻播放器控制，切换路由不会中断播放。本地文件使用 Object URL，不会上传。
