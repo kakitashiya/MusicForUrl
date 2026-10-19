@@ -39,11 +39,10 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 
 /** 统计数字块。数值在加载时用占位骨架，避免先闪一个 0 再跳到真实值。 */
 function Stat({
-  label, value, hint, loading, wide = false,
+  label, value, loading, wide = false,
 }: {
   label: string;
   value: string;
-  hint?: string;
   loading: boolean;
   wide?: boolean;
 }) {
@@ -55,7 +54,6 @@ function Stat({
       ) : (
         <p className="mt-1.5 text-[27px] font-semibold leading-none tracking-tight tabular-nums">{value}</p>
       )}
-      {hint && <p className="mt-1.5 text-[11.5px] text-muted-foreground">{hint}</p>}
     </div>
   );
 }
@@ -108,37 +106,11 @@ export function AboutView() {
         </div>
 
         <div className="grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-3 lg:grid-cols-5">
-          <Stat
-            label="累计解析歌曲"
-            value={`${formatCount(data?.parsedSongs ?? 0)} 首`}
-            hint="自 2.1.0 起，按每次解析到的歌单曲目数累加"
-            loading={loading}
-          />
-          <Stat
-            label="总播放时长"
-            value={formatTotalDuration(data?.playDurationMs ?? 0)}
-            hint="近 30 天保留窗口内的累计值"
-            loading={loading}
-          />
-          <Stat
-            label="使用人数"
-            value={`${formatCount(data?.listeners ?? 0)} 人`}
-            hint="登录过的账号数"
-            loading={loading}
-          />
-          <Stat
-            label="累计播放"
-            value={`${formatCount(data?.plays ?? 0)} 次`}
-            hint={`去重后计入的完整播放 · 覆盖 ${formatCount(data?.playlists ?? 0)} 个歌单`}
-            loading={loading}
-          />
-          <Stat
-            label="生成链接"
-            value={`${formatCount(data?.generatedLinks ?? 0)} 个`}
-            hint="自 2.1.0 起成功签发的播放链接"
-            loading={loading}
-            wide
-          />
+          <Stat label="累计解析歌曲" value={`${formatCount(data?.parsedSongs ?? 0)} 首`} loading={loading} />
+          <Stat label="总播放时长" value={formatTotalDuration(data?.playDurationMs ?? 0)} loading={loading} />
+          <Stat label="使用人数" value={`${formatCount(data?.listeners ?? 0)} 人`} loading={loading} />
+          <Stat label="累计播放" value={`${formatCount(data?.plays ?? 0)} 次`} loading={loading} />
+          <Stat label="生成链接" value={`${formatCount(data?.generatedLinks ?? 0)} 个`} loading={loading} wide />
         </div>
       </section>
 
