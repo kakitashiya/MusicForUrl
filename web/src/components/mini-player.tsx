@@ -18,6 +18,7 @@ export function MiniPlayer() {
   const source = usePlayer(state => state.source);
   const status = usePlayer(state => state.status);
   const message = usePlayer(state => state.message);
+  const errorCode = usePlayer(state => state.errorCode);
   const quality = usePlayer(state => state.quality);
   const autoplay = usePlayer(state => state.autoplay);
   const next = usePlayer(state => state.next);
@@ -27,7 +28,6 @@ export function MiniPlayer() {
   const retry = usePlayer(state => state.retry);
   const markPlaying = usePlayer(state => state.markPlaying);
   const markPaused = usePlayer(state => state.markPaused);
-  const markEnded = usePlayer(state => state.markEnded);
   const fail = usePlayer(state => state.fail);
   const clear = usePlayer(state => state.clear);
   const volume = useVolume(state => state.volume);
@@ -66,9 +66,12 @@ export function MiniPlayer() {
     if (audio) audio.volume = effectiveVolume({ volume, muted });
   }, [volume, muted, source?.mediaUrl]);
 
-  if (!playlist || !track) return null;
-
   const paused = status === 'paused' || status === 'ended';
+  // 跳转由 store 里的定时器负责，这里只提示用户
+  const willSkip = status === 'error' && errorCode === 'unavailable'
+    && !!playlist && index + 1 < playlist.tracks.length;
+
+  if (!playlist || !track) return null;
   const percent = progress.duration > 0 ? (progress.time / progress.duration) * 100 : 0;
 
   function handleError() {
@@ -94,7 +97,7 @@ export function MiniPlayer() {
         ref={audioRef}
         onPlay={markPlaying}
         onPause={markPaused}
-        onEnded={markEnded}
+        onEnded={() => void next()}
         onError={handleError}
         onTimeUpdate={event => {
           positionRef.current = event.currentTarget.currentTime;
@@ -169,7 +172,7 @@ export function MiniPlayer() {
         </div>
 
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
-          <VolumeControl className="hidden xl:flex" compact />
+          <VolumeControl className="hidden xl:flex" />
           <Select value={quality} onValueChange={value => void setQuality(value as QualityOption['id'])}>
             <SelectTrigger className="hidden h-8 w-[8.5rem] lg:flex" aria-label="音质">
               <SelectValue />
@@ -214,6 +217,7 @@ export function MiniPlayer() {
               {message}
             </p>
           )}
+          {willSkip && <span className="text-[11.5px] text-muted-foreground">即将跳到下一首…</span>}
         </div>
       )}
 

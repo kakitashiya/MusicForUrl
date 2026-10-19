@@ -9,25 +9,18 @@ function iconFor(level: number) {
 }
 
 /**
- * 全局音量控制。
+ * 播放条上的音量控制。
  *
  * 状态在 `useVolume` 里，写入 localStorage，因此刷新与页面切换都不会丢。
  * 轨道支持点击定位、按住拖动、方向键微调（每次 5%）与 Home/End 跳到两端。
  */
-export function VolumeControl({
-  className, compact = false, tone = 'default',
-}: {
-  className?: string;
-  compact?: boolean;
-  tone?: 'default' | 'rail';
-}) {
+export function VolumeControl({ className }: { className?: string }) {
   const volume = useVolume(state => state.volume);
   const muted = useVolume(state => state.muted);
   const setVolume = useVolume(state => state.setVolume);
   const toggleMute = useVolume(state => state.toggleMute);
   const trackRef = React.useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = React.useState(false);
-  const rail = tone === 'rail';
 
   const level = effectiveVolume({ volume, muted });
   const Icon = iconFor(level);
@@ -81,13 +74,9 @@ export function VolumeControl({
         aria-label={muted || volume === 0 ? '取消静音' : '静音'}
         aria-pressed={muted || volume === 0}
         title={muted || volume === 0 ? '取消静音' : '静音'}
-        className={cn(
-          'grid shrink-0 place-items-center rounded-lg transition-colors',
-          compact ? 'size-8' : 'size-9',
-          rail ? 'text-rail-foreground hover:text-rail-active-foreground' : 'text-muted-foreground hover:text-foreground',
-        )}
+        className="grid size-8 shrink-0 place-items-center rounded-lg text-muted-foreground transition-colors hover:text-foreground"
       >
-        <Icon className={compact ? 'size-4' : 'size-[18px]'} />
+        <Icon className="size-4" />
       </button>
 
       <div
@@ -105,11 +94,7 @@ export function VolumeControl({
           setDragging(true);
           setVolume(volumeAt(event.clientX));
         }}
-        className={cn(
-          'group relative flex cursor-pointer touch-none items-center rounded-full',
-          rail ? 'bg-white/15' : 'bg-muted',
-          compact ? 'h-1 w-full min-w-20 flex-1' : 'h-1.5 w-28',
-        )}
+        className="group relative flex h-1 w-full min-w-20 flex-1 cursor-pointer touch-none items-center rounded-full bg-muted"
       >
         <span
           className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-primary to-[color-mix(in_srgb,var(--primary)_60%,white)]"
@@ -125,19 +110,6 @@ export function VolumeControl({
         />
       </div>
 
-      {!compact && (
-        <span className="w-9 shrink-0 text-right text-[11.5px] tabular-nums text-muted-foreground">{percent}%</span>
-      )}
-    </div>
-  );
-}
-
-/** 侧栏与顶栏用的一行式音量：图标 + 轨道 + 百分比。 */
-export function VolumeRow({ className }: { className?: string }) {
-  return (
-    <div className={cn('flex items-center justify-between gap-3', className)}>
-      <span className="text-[13px] text-muted-foreground">音量</span>
-      <VolumeControl />
     </div>
   );
 }

@@ -286,9 +286,10 @@ test('guest platforms serve a full generate → m3u8 → segment chain without a
   assert.equal(segment.headers.get('location'), 'https://fs.kgimg.com/a.mp3');
   await Promise.all(pending);
 
-  // 游客没有 users 行，播放记录不会写进 play_stats，但生成链接会累加解析数
+  // 游客没有 users 行，播放记录不会写进 play_stats，但解析数与签发链接数都会累加
   assert.equal(env.sqlite.prepare('SELECT COUNT(*) AS total FROM play_stats').get().total, 0);
   assert.equal(env.sqlite.prepare("SELECT value FROM site_stats WHERE key = 'parsedSongs'").get().value, 1);
+  assert.equal(env.sqlite.prepare("SELECT value FROM site_stats WHERE key = 'generatedLinks'").get().value, 1);
 });
 
 test('guest platforms reject the account-only routes with an actionable message', async () => {

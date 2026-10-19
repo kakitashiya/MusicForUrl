@@ -1,7 +1,8 @@
 // 站点统计。
 //
 // 设计取舍：这些数字是「关于」页的门面，不值得为它增加播放路径上的写入。
-//   - 累计解析歌曲数 / 生成链接数：只在生成链接时 +1 行写入（低频操作），实时。
+//   - 累计解析歌曲数 / 生成链接数：每次解析歌单（/parse、/generate）与每次签发链接（/url、/generate）
+//     各累加一次，低频写入，实时。旧版前端走 /parse + /url，新前端走 /generate，两条路径都计数。
 //   - 累计播放次数 / 总播放时长 / 使用人数 / 收录曲目数：从 play_stats 与 users 聚合，
 //     放在 cron 与按 TTL 触发的惰性刷新里算，绝不进入请求路径。
 //
@@ -27,18 +28,27 @@ function emptyStats() {
   };
 }
 
-/** 生成链接时累加。单行 UPSERT，失败只影响统计，绝不影响生成结果。 */
-async function bumpParsedSongs(env, songCount, links = 1) {
+/**
+ * 解析/签发链接时累加，批量写入一次往返。
+ *
+ * 旧版前端走 /parse + /url，新前端走 /generate，因此两个入口都要计数：
+ * 每份被解析的歌单记一次 parsedSongs，每签发一个播放链接记一次 generatedLinks。
+ * 失败只影响统计，绝不影响生成结果。
+ */
+async function bumpParsedSongs(env, songCount, links = 0) {
   const songs = Math.max(0, Number(songCount) || 0);
+  const count = Math.max(0, Number(links) || 0);
+  if (!songs && !count) return;
+  const now = Date.now();
+  const bump = (key, value) => env.DB.prepare(`
+    INSERT INTO site_stats (key, value, updated_at_ms) VALUES (?, ?, ?)
+    ON CONFLICT (key) DO UPDATE SET value = site_stats.value + excluded.value
+  `).bind(key, value, now);
+  const statements = [];
+  if (songs) statements.push(bump('parsedSongs', songs));
+  if (count) statements.push(bump('generatedLinks', count));
   try {
-    await env.DB.prepare(`
-      INSERT INTO site_stats (key, value, updated_at_ms) VALUES ('parsedSongs', ?, ?)
-      ON CONFLICT (key) DO UPDATE SET value = site_stats.value + excluded.value
-    `).bind(songs, Date.now()).run();
-    await env.DB.prepare(`
-      INSERT INTO site_stats (key, value, updated_at_ms) VALUES ('generatedLinks', ?, ?)
-      ON CONFLICT (key) DO UPDATE SET value = site_stats.value + excluded.value
-    `).bind(Math.max(0, Number(links) || 0), Date.now()).run();
+    await env.DB.batch(statements);
   } catch (error) {
     console.warn('[Stats] bump failed', error.message);
   }

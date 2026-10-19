@@ -1,14 +1,12 @@
 import { useLocation } from 'react-router-dom';
 import { AccountMenu } from '@/components/account-menu';
 import { ThemeToggle } from '@/components/theme-toggle';
-import { VolumeControl } from '@/components/volume-control';
 import { VIEW_TITLES, routeFromPath } from '@/lib/routes';
 
 /**
  * 顶栏。
  *
- * 只放两类东西：当前位置（面包屑）与全局开关（账号、音量、主题）。
- * 导航在侧栏，播放控制在底部，三块区域职责不重叠。
+ * 只放当前位置与账号、主题开关。音量属于播放器，只保留在底部播放条。
  */
 export function Topbar() {
   const location = useLocation();
@@ -29,8 +27,6 @@ export function Topbar() {
       </div>
 
       <div className="flex shrink-0 items-center gap-2">
-        <VolumeControl className="hidden lg:flex" compact />
-        <span aria-hidden="true" className="hidden h-5 w-px bg-border lg:block" />
         <AccountMenu />
         <ThemeToggle />
       </div>

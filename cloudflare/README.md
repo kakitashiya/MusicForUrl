@@ -66,7 +66,7 @@ JSON 请求体按实际读取字节限制为 65,536 字节，不依赖 `Content-
 
 「关于」页的数字来自 `site_stats`，写入路径刻意分两类：
 
-- **实时累加**：`parsedSongs`（生成链接时按歌单曲目数累加）与 `generatedLinks`。只在生成链接时各写一行，不进入播放路径。
+- **实时累加**：`parsedSongs`（每次解析到歌单时按曲目数累加）与 `generatedLinks`（每次签发播放链接累加）。旧版前端的 `/parse` + `/url` 与新前端的 `/generate` 都会计数，批量写入一次，不进入播放路径。
 - **聚合派生**：累计播放、总播放时长、收录曲目、歌单数与使用人数，从 `play_stats` 与 `users` 汇总。这是一次全表扫描，因此只在 Cron（每天 UTC 03:17，在清理之后）与惰性刷新时执行。
 
 | 变量 | 作用 | 默认值 |
@@ -109,7 +109,7 @@ Cloudflare 版前端位于仓库根目录的 `web/`：**React + Vite + Tailwind 
 
 左侧导航统一提供链接生成、我的音乐、媒体预览、账号管理和关于页面；收起时底部只保留一个跟随当前平台的账号头像、外观与音量入口和展开按钮。窄屏显示紧凑导航；页面、列表、分段控件与弹窗由 `motion`（framer-motion）控制，并响应系统的减少动态效果设置，详见[动画说明](ANIMATION.md)。界面延续天蓝与白色调色板与亮暗主题，但改用实色卡片、1px 边框与 2px 小圆角，不再使用玻璃拟态。
 
-字体使用 **HarmonyOS Sans SC**，字库由 `cn-font-split` 按 `unicode-range` 切成多个 woff2 子集（只引入 400 / 500 / 600 三档），浏览器按页面实际用字下载，并带 `font-display: swap` 避免首屏空白。构建脚本用 `cross-env` 强制 `NODE_ENV=production`，避免误打开发版 React；首页直接进入主包，其余路由、播放条、登录弹窗与 `domMax` 动画特性按需加载，依赖拆成 react、radix、sonner、icons 等长缓存块。
+字体使用 **HarmonyOS Sans SC**，字库由 `cn-font-split` 按 `unicode-range` 切成多个 woff2 子集（只引入 400 / 500 / 600 三档），浏览器按页面实际用字下载，并带 `font-display: swap` 避免首屏空白。构建脚本用 `cross-env` 强制 `NODE_ENV=production`，避免误打开发版 React；首页直接进入主包，其余路由、播放条与登录弹窗按需加载，依赖拆成 react、radix、sonner、icons 等长缓存块。
 
 账号管理连接两个平台的现有登录状态，每个平台保留一个当前登录账号。可以重新登录以切换账号、选择常用平台、退出登录，并保存本机名称和备注。名称和备注以平台及账号 ID 为键保存到浏览器；不会修改音乐平台资料，也不跨设备同步。新前端保留了旧版全部 `localStorage` 键（`token`、`qqToken`、`theme`、`generatorPlatform`、`personalPlatformTab`、`mfu:player-quality`、`mfu:account:<platform>:<userId>`），因此升级不会让已登录用户掉线。
 

@@ -237,7 +237,8 @@ test('Worker serves a cached lightweight playlist and rejects unauthenticated AP
   `).bind(user.id, '123456', 'Test list', '', 1, JSON.stringify([
     { id: '555', name: 'Track', artist: 'Artist', duration: 200, cover: '' },
   ]), Date.now() + 60000).run();
-  const ctx = { waitUntil() {} };
+  const pending = [];
+  const ctx = { waitUntil(promise) { pending.push(promise); } };
 
   const unauthenticated = await worker.fetch(
     new Request('https://music.example.test/api/playlist/url?id=123456'), env, ctx,
@@ -276,6 +277,11 @@ test('Worker serves a cached lightweight playlist and rejects unauthenticated AP
     `https://music.example.test/api/hls/${encodeURIComponent(body.data.url)}/123456/master.m3u8`,
   ), env, ctx);
   assert.equal(obsolete.status, 410);
+
+  // 旧版前端只走 /url：签发链接要计入，未重新解析歌单则解析数保持 0
+  await Promise.all(pending);
+  assert.equal(env.sqlite.prepare("SELECT value FROM site_stats WHERE key = 'generatedLinks'").get().value, 1);
+  assert.equal(env.sqlite.prepare("SELECT COUNT(*) AS total FROM site_stats WHERE key = 'parsedSongs'").get().total, 0);
 });
 
 test('favorites and recent history use the signed-in account in D1', async () => {

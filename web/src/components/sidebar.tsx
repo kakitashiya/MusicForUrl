@@ -8,7 +8,6 @@ import { NAV_ORDER, VIEW_TITLES, viewPath, type ViewName } from '@/lib/routes';
 import { platformInfo, platformShort } from '@/lib/platforms';
 import type { Platform } from '@/lib/types';
 import { ThemeChoice } from '@/components/theme-toggle';
-import { VolumeControl } from '@/components/volume-control';
 import { useAuth } from '@/stores/auth';
 import { useUi } from '@/stores/ui';
 
@@ -96,9 +95,9 @@ function AccountAvatar({ platform, expanded }: { platform: Platform; expanded: b
 /**
  * 侧边栏。
  *
- * 层级自上而下：品牌 → 主导航 → 外观与音量 → 账号头像与收起开关。收起时只留
- * 图标、唯一的账号头像与开关。账号头像跟随「我的音乐」当前平台，其它账号在顶栏
- * 的账号菜单里。展开状态写在本机，默认收起。
+ * 层级自上而下：品牌 → 主导航 → 外观 → 账号头像与收起开关。收起时只留图标、
+ * 唯一的账号头像与开关。账号头像跟随「我的音乐」当前平台，其它账号在顶栏的
+ * 账号菜单里；音量只在底部播放条。展开状态写在本机，默认收起。
  *
  * 窄屏（< md）没有展开空间，此时它退化成顶部图标条，账号与外观入口交给顶栏——
  * 与其做一个半成品的抽屉，不如让每个断点只有一套明确的交互。
@@ -181,12 +180,6 @@ export function Sidebar() {
               外观
             </p>
             <ThemeChoice tone="rail" />
-            <div className="mt-2.5 border-t border-white/10 pt-2.5">
-              <p className="pb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-rail-foreground/70">
-                音量
-              </p>
-              <VolumeControl tone="rail" compact />
-            </div>
           </div>
         )}
 

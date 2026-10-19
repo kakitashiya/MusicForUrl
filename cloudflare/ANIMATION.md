@@ -16,14 +16,14 @@ Cloudflare 版前端是 **React + Vite**，动画由 **`motion`（framer-motion�
 | --- | --- | --- |
 | `web/src/motion/primitives.tsx` → `PageTransition` | 五个视图互相切换、浏览器前进/后退 | `AnimatePresence mode="wait"`，先退出旧页面再进入新页面；`App.tsx` 按路由分包，切换时由 `Suspense` 兜底 |
 | `web/src/components/sidebar.tsx` → 导航项 | 切换工作台页面 | 用 `NavLink` 的激活态直接切换背景色，不再需要测量位置的滑块 |
-| `web/src/components/sidebar.tsx` → 展开/收起 | 点击品牌行右侧的开关 | 纯 CSS `width` 过渡（250ms `cubic-bezier(0.4,0,0.2,1)`），宽度由 `--rail-width` 驱动；文字标签不参与动画，直接按状态挂载/卸载，避免收起过程中出现半截文字 |
-| `web/src/components/volume-control.tsx` | 点击或拖动轨道、方向键、静音 | 填充宽度与滑块位置随音量即时更新，不做补间——音量是连续量，动画只会让手感发黏；滑块圆点在 hover / 聚焦 / 拖动时淡入 |
+| `web/src/components/sidebar.tsx` → 展开/收起 | 点击底部账号头像旁的开关 | 纯 CSS `width` 过渡（250ms `cubic-bezier(0.4,0,0.2,1)`），宽度由 `--rail-width` 驱动；文字标签不参与动画，直接按状态挂载/卸载，避免收起过程中出现半截文字 |
+| `web/src/components/volume-control.tsx`（只在播放条） | 点击或拖动轨道、方向键、静音 | 填充宽度与滑块位置随音量即时更新，不做补间——音量是连续量，动画只会让手感发黏；滑块圆点在 hover / 聚焦 / 拖动时淡入 |
 | `web/src/motion/primitives.tsx` → `Segmented` | 切换音乐平台、登录平台 | `layoutId` 共享元素过渡取代旧版手写测量 `offsetLeft/offsetWidth` 的做法；每个实例用 `useId` 隔离 |
 | `web/src/views/user.tsx` → 我的歌单 / 我的收藏 / 最近播放 / 最常播放 | 切换内容 Tab | Radix `Tabs` 负责状态与无障碍，面板内容按需渲染 |
 | `web/src/motion/primitives.tsx` → `ListReveal` / `ListItem` | 歌单、收藏、最近播放列表渲染 | 容器 `staggerChildren`，行以 `y=8px` 错峰进入 |
 | `web/src/components/login-dialog.tsx` | 打开、关闭按钮、Escape、点击遮罩 | Radix `Dialog` 提供焦点陷阱、背景 `inert` 与 ARIA，`DialogContent` 负责进出场 |
 | `web/src/components/account-menu.tsx` | 点击顶栏账号入口 | 面板直接挂载，不做位移；点击外部或 Escape 关闭，避免焦点管理复杂化 |
-| `web/src/components/mini-player.tsx` | 切歌、切换音质、播放/暂停、展开队列 | 状态变化驱动，不使用位移动画，避免影响播放控件可用性 |
+| `web/src/components/mini-player.tsx` | 切歌、切换音质、播放/暂停、展开队列；曲目自然结束或整首不可播时自动下一首 | 状态变化驱动，不使用位移动画，避免影响播放控件可用性 |
 | `web/src/stores/theme.ts` | 点击亮色 / 深色开关，或在侧栏选择跟随系统 | 直接切换 `documentElement.dataset.theme`；调色板差异由 CSS 变量承担，不再逐帧插值 |
 
 ## 实装参数

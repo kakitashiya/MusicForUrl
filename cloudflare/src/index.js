@@ -277,6 +277,8 @@ async function playlistRoute(request, env, ctx, platform, path, url) {
     const playlistId = parsePlaylistId(url.searchParams.get('url'), platform);
     if (!playlistId) return fail('无效的歌单链接或 ID');
     const playlist = await getPlaylist(env, user, playlistId, ctx);
+    // 旧版前端先 /parse 再 /url：解析数只在这里累加，链接数留给 /url
+    ctx.waitUntil(bumpParsedSongs(env, playlist.tracks.length, 0));
     return json({ success: true, data: {
       id: playlist.id, name: playlist.name, cover: playlist.cover, songCount: playlist.songCount,
     } });
@@ -287,6 +289,8 @@ async function playlistRoute(request, env, ctx, platform, path, url) {
     if (!validPlaylistId(playlistId, platform)) return fail('无效的歌单 ID');
     await getPlaylist(env, user, playlistId, ctx);
     const token = await createPlaybackToken(env, user, playlistId);
+    // 旧版前端的签发入口：解析已在 /parse 计过，这里只加链接数
+    ctx.waitUntil(bumpParsedSongs(env, 0, 1));
     return json({ success: true, data: playlistUrlPayload(url.origin, platform, token, playlistId) });
   }
 
@@ -300,8 +304,8 @@ async function playlistRoute(request, env, ctx, platform, path, url) {
     if (!playlistId) return fail('无效的歌单链接或 ID');
     const playlist = await getPlaylist(env, user, playlistId, ctx);
     const token = await createPlaybackToken(env, user, playlistId);
-    // 「累计解析歌曲总数」的唯一写入点：每次生成链接按歌单曲目数累加
-    ctx.waitUntil(bumpParsedSongs(env, playlist.tracks.length));
+    // 新前端的入口：一次请求同时累加解析歌曲数与生成的链接数
+    ctx.waitUntil(bumpParsedSongs(env, playlist.tracks.length, 1));
     return json({ success: true, data: {
       playlist: {
         id: playlist.id, name: playlist.name, cover: playlist.cover, songCount: playlist.songCount,
