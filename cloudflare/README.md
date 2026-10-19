@@ -28,7 +28,7 @@ Cloudflare 目前建议新项目使用 Workers Static Assets；若你习惯 Page
 
 | 功能 | Cloudflare 版 |
 | --- | --- |
-| 网易云、QQ 音乐扫码或 Cookie 登录 | 保留；网易云还支持手机验证码和密码登录 |
+| 网易云、QQ 音乐、酷狗扫码或 Cookie 登录 | 保留；网易云还支持手机验证码和密码登录；酷狗只有扫码 |
 | 用户歌单、链接解析、收藏、最近播放 | 保留，数据写入 D1 |
 | 轻量 M3U8 | 保留，MP3 分片通过本站流式提供，并添加 Packed Audio 的 ID3 时间戳 |
 | VIP 歌曲 | 取决于登录账号的真实权限和平台接口返回值 |
@@ -47,7 +47,7 @@ Cloudflare 仅支持 `MUSIC_QUALITY=low/medium/high` 的 MP3 音质。旧配置 
 
 ### 登录认证与请求体限制
 
-网易云登录令牌仅从 `x-token` 请求头读取，QQ 音乐仅从 `x-qq-token` 读取；URL 查询参数 `token` / `qqtoken` 不参与登录认证或退出登录。退出接口保留 JSON 请求体中的显式令牌兼容方式。播放链接仍使用独立的签名令牌。
+网易云登录令牌仅从 `x-token` 请求头读取，QQ 音乐仅从 `x-qq-token`、酷狗仅从 `x-kugou-token` 读取；URL 查询参数 `token` / `qqtoken` 不参与登录认证或退出登录。退出接口保留 JSON 请求体中的显式令牌兼容方式。播放链接仍使用独立的签名令牌。
 
 JSON 请求体按实际读取字节限制为 65,536 字节，不依赖 `Content-Length`。流式或分块请求超过上限会被取消并返回 HTTP 413。
 
@@ -60,7 +60,7 @@ JSON 请求体按实际读取字节限制为 65,536 字节，不依赖 `Content-
 
 这样做的原因：旧实现每次播放执行 3 条语句，其中裁剪语句会扫描 1,000–2,000 行，一次 30 首歌的播放约消耗 **45,000 行读取**，对免费版每天 500 万行只够约 110 次播放。改为聚合后每次播放约 450 行读取、30 行写入。
 
-**升级顺序（重要）**：`npm run db:remote`（建表，幂等）→ `npm run db:backfill`（把旧 `play_logs` 聚合成 `play_stats`，**必须在部署新版 Worker 之前执行一次**）→ `npm run db:migrate:stats`（给 `play_stats` 加 `duration_ms` 并建 `site_stats`，**同样必须在部署前执行**，否则 `recordPlayback` 会因为缺列整条失败）→ `npm run deploy`。`play_logs` 暂时保留以便回填，观察一个版本后可删除。`schema.sql` 可重复执行，不清空账号、歌单或收藏；新库直接用它即可，不需要跑迁移。
+**升级顺序（重要）**：`npm run db:remote`（建表，幂等）→ `npm run db:backfill`（把旧 `play_logs` 聚合成 `play_stats`，**必须在部署新版 Worker 之前执行一次**）→ `npm run db:migrate:stats`（给 `play_stats` 加 `duration_ms` 并建 `site_stats`，**同样必须在部署前执行**，否则 `recordPlayback` 会因为缺列整条失败）→ `npm run db:migrate:qr`（重建 `qr_sessions`，去掉只允许 netease/qq 的 CHECK，**必须在酷狗扫码登录上线前执行**）→ `npm run deploy`。`play_logs` 暂时保留以便回填，观察一个版本后可删除。`schema.sql` 可重复执行，不清空账号、歌单或收藏；新库直接用它即可，不需要跑迁移。
 
 ### 站点统计
 
@@ -73,7 +73,7 @@ JSON 请求体按实际读取字节限制为 65,536 字节，不依赖 `Content-
 | --- | --- | --- |
 | `STATS_REFRESH_MINUTES` | 派生统计的最小刷新间隔；调大可以降低扫描成本，代价是数字变旧 | `60` |
 
-游客平台（酷狗、酷我）没有 `users` 行，播放不写 `play_stats`，但会写入 Analytics Engine，因此仍计入匿名汇总。播放记录、收藏与歌单缓存的账号归属规则见 [平台与账号模型](PLATFORMS.md#多账号与数据归属)。
+游客播放（酷我，以及未登录的酷狗）没有 `users` 行，播放不写 `play_stats`，但会写入 Analytics Engine，因此仍计入匿名汇总。播放记录、收藏与歌单缓存的账号归属规则见 [平台与账号模型](PLATFORMS.md#多账号与数据归属)。
 
 ### 配额、降级与可观测性
 
@@ -181,4 +181,4 @@ Pages Functions 入口在根目录 `functions/[[path]].js`，配置为 `wrangler
 
 旧版 Express/SQLite 数据不会自动导入 D1，需要重新登录，收藏和历史从新数据库开始。`server.js`、`routes/` 与 `deploy/` 继续支持自有服务器。Cloudflare 使用 `cloudflare/src/`、`cloudflare/schema.sql`、共享 `lib/player-*.js` 策略 / API / 代理、`lib/qqmusic.js` 与 `public/`。
 
-网易云与 QQ 音乐接口并非 Cloudflare 平台服务，可能随上游接口或风控变化而失效。部署后应分别用真实账号验证扫码、歌单解析、音频地址和播放器行为。
+网易云、QQ 音乐、酷狗与酷我的接口并非 Cloudflare 平台服务，可能随上游接口或风控变化而失效。部署后应分别用真实账号验证扫码、歌单解析、音频地址和播放器行为；酷狗扫码登录的签名算法也随 Web 前端发版变化，失效时先看 `kugou-login.js`。

@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS playlists (
 CREATE INDEX IF NOT EXISTS playlists_expiry_idx ON playlists(expires_at_ms);
 
 CREATE TABLE IF NOT EXISTS qr_sessions (
-  platform TEXT NOT NULL CHECK (platform IN ('netease', 'qq')),
+  -- 平台只在这里存扫码会话，合法性由平台注册表保证；不写 CHECK，新增平台不需要重建表
+  platform TEXT NOT NULL,
   key_hash TEXT NOT NULL,
   expires_at_ms INTEGER NOT NULL,
   PRIMARY KEY (platform, key_hash)

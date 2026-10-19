@@ -6,9 +6,10 @@
 // 线上 VRChat 里已经签发的 M3U8 链接就是这个形状，改前缀等于全部失效。
 
 /**
- * account  —— 支持账号登录（有 users 行、Cookie、收藏与播放记录）
+ * account  —— 支持账号登录（有 users 行与 Cookie；登录弹窗里会出现入口）
  * library  —— 「我的音乐」是否可用（歌单 / 收藏 / 播放记录都依赖账号）
  * playback —— 是否能在站内播放与生成 M3U8
+ * guestPlayback —— 未登录也能解析与播放；登录只补充账号身份（酷狗 / 酷我）
  */
 const PLATFORMS = {
   netease: {
@@ -42,16 +43,17 @@ const PLATFORMS = {
     imageHosts: /(^|\.)(qq\.com|gtimg\.cn|qlogo\.cn)$/,
   },
 
-  // 酷狗与酷我只有游客能力：不需要登录即可读公开歌单并解析音源，
-  // 因此没有 users 行、没有 Cookie、没有收藏与播放记录。
+  // 酷狗：支持扫码登录（账号身份），但歌单与音源仍走游客公开接口，
+  // 所以没有「我的音乐」；未登录时照常解析与播放。
   kugou: {
     id: 'kugou',
     label: '酷狗音乐',
     prefix: '/api/kugou',
     tokenHeader: 'x-kugou-token',
-    account: false,
+    account: true,
     library: false,
     playback: true,
+    guestPlayback: true,
     // 酷狗用 32 位 hash 标识歌曲；适配器会把 320 与无损两档的 hash 用「-」拼在后面，
     // 这样 M3U8 里的单个 ID 也能带上音质信息
     songIdPattern: /^[A-Fa-f0-9]{32}(?:-[A-Fa-f0-9]{32}){0,2}$/,
@@ -60,6 +62,8 @@ const PLATFORMS = {
     imageHosts: /(^|\.)(kugou\.com|kgimg\.com|kglink\.cn)$/,
   },
 
+  // 酷我：站点没有扫码登录接口（只有账号密码 / 短信 / 微信 OAuth），
+  // 因此保持纯游客能力；未登录照常解析与播放。
   kuwo: {
     id: 'kuwo',
     label: '酷我音乐',
@@ -68,6 +72,7 @@ const PLATFORMS = {
     account: false,
     library: false,
     playback: true,
+    guestPlayback: true,
     songIdPattern: /^\d{1,20}$/,
     playlistIdPattern: /^\d{1,20}$/,
     audioHosts: /(^|\.)(kuwo\.cn|kwcdn\.cn|kuwo\.com)$/,

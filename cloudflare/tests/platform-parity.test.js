@@ -29,8 +29,8 @@ test('every platform declares a non-empty capability note', () => {
 });
 
 test('library implies account for every platform', () => {
-  // 没有账号就不可能有个人的歌单与收藏，这条不变量两边都要成立
+  // 反方向不成立：酷狗可以扫码登录，但个人歌单/收藏尚未接入。
   for (const item of PLATFORM_TABLE) {
-    assert.equal(item.library, item.account, `${item.id}: library 必须与 account 一致`);
+    if (item.library) assert.equal(item.account, true, `${item.id}: library 必须以 account 为前提`);
   }
 });

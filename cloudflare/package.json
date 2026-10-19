@@ -13,6 +13,7 @@
     "db:remote": "wrangler d1 execute music-for-url --remote --file=./schema.sql",
     "db:backfill": "wrangler d1 execute music-for-url --remote --file=./migrations/0001-backfill-play-stats.sql",
     "db:migrate:stats": "wrangler d1 execute music-for-url --remote --file=./migrations/0002-site-stats.sql",
+    "db:migrate:qr": "wrangler d1 execute music-for-url --remote --file=./migrations/0003-qr-sessions-kugou.sql",
     "test": "node --test tests/worker.test.js tests/platforms.test.js tests/platform-parity.test.js tests/netease.test.js tests/packed-audio.test.js tests/workspace.test.js tests/qqmusic.test.js"
   },
   "dependencies": {

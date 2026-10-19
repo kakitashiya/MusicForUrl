@@ -185,10 +185,14 @@ function handlePlayer(request, env, ctx) {
       playlistId: (value, platform) => (PLATFORMS[platform]?.playlistIdPattern || /^\d{1,20}$/).test(String(value || '')),
       songId: (value, platform) => (PLATFORMS[platform]?.songIdPattern || /^\d{1,20}$/).test(String(value || '')),
     },
-    // 游客平台不需要登录：直接给一个没有 Cookie 的匿名用户
-    session: (req, platform) => PLATFORMS[platform]?.account
-      ? getSessionUser(env, req, platform)
-      : guestUser(platform),
+    // 游客平台不需要登录：直接给一个没有 Cookie 的匿名用户。
+    // 酷狗支持登录，但登录不是播放的前置条件，未登录时回退到匿名用户。
+    session: async (req, platform) => {
+      const meta = PLATFORMS[platform];
+      if (!meta?.account) return guestUser(platform);
+      const user = await getSessionUser(env, req, platform);
+      return user || (meta.guestPlayback ? guestUser(platform) : null);
+    },
     verifyGrant: (grant, platform, id) => getPlaybackUser(env, grant, platform, id),
     mintGrant: (user, id) => createPlaybackToken(env, user, id),
     playlist: (user, id) => cachedPlaylist(env, user, id, ctx),

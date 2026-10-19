@@ -18,7 +18,7 @@ import { degradeMode, secondsUntilUtcMidnight } from './degrade.js';
 
 const QR_TTL_MS = 3 * 60 * 1000;
 const MAX_REQUEST_BODY_BYTES = 65536;
-const NO_LIBRARY_MESSAGE = '该平台只支持歌单解析与播放，没有账号体系，因此没有个人歌单、收藏与播放记录。';
+const NO_LIBRARY_MESSAGE = '该平台暂不支持个人歌单、收藏与播放记录。';
 
 class RequestBodyTooLargeError extends Error {}
 
@@ -123,6 +123,7 @@ async function saveLogin(env, platform, profile, cookie, code) {
 
 async function accountStatus(platform, cookie) {
   if (platform === 'qq') return qqmusic.checkLoginStatus(cookie);
+  if (platform === 'kugou') return adapter(platform).checkLoginStatus(cookie);
   return netease.checkLoginStatus(cookie);
 }
 
@@ -202,6 +203,13 @@ async function authRoute(request, env, platform, path, url) {
       } else {
         status = await accountStatus(platform, cookie);
         if (!status.logged || !status.userId) return fail('登录状态异常');
+        if (platform === 'kugou') {
+          status = {
+            ...status,
+            nickname: status.nickname || result.nickname || `酷狗用户${status.userId}`,
+            avatar: status.avatar || result.avatar || '',
+          };
+        }
       }
       return saveLogin(env, platform, {
         ...status,
@@ -248,8 +256,10 @@ async function authRoute(request, env, platform, path, url) {
 
 async function playlistRoute(request, env, ctx, platform, path, url) {
   const meta = PLATFORMS[platform];
-  // 游客平台不需要登录：解析与播放只依赖公开接口
-  const user = meta.account ? await requireUser(env, request, platform, url) : guestUser(platform);
+  // 游客平台不需要登录：解析与播放只依赖公开接口。
+  // 酷狗虽然支持扫码登录，但登录只补充账号身份，未登录仍然可以解析与播放。
+  const sessionUser = meta.account ? await requireUser(env, request, platform, url) : null;
+  const user = sessionUser || (meta.guestPlayback ? guestUser(platform) : null);
   if (!user) return fail('请先登录', 401);
 
   // 额度耗尽时只拒新会话，已签发的播放链接不受影响

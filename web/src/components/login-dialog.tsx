@@ -269,11 +269,12 @@ export function LoginDialog() {
             <TabsContent value="cookie"><CookiePanel platform="netease" onSuccess={handlers.netease} /></TabsContent>
           </Tabs>
         ) : (
-          <QrPanel platform="qq" onSuccess={handlers.qq} />
+          <QrPanel platform={active} onSuccess={handlers[active]} />
         )}
 
         <p className="mt-4 border-t border-border pt-3 text-[12px] text-muted-foreground">
-          酷狗与酷我无需登录即可解析歌单与播放，因此没有登录入口，也没有个人歌单、收藏与播放记录。
+          酷狗支持扫码登录，但登录只用于账号身份，歌单与音源仍走公开接口，不提供个人歌单与收藏。
+          酷我暂时没有可用的扫码登录接口，因此只保留免登录播放。
         </p>
       </DialogContent>
     </Dialog>

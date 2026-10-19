@@ -8,20 +8,24 @@
 | --- | --- | --- | --- | --- | --- |
 | 网易云音乐 | `/api` | `x-token` | 扫码 / 验证码 / 密码 / Cookie | 支持 | 支持 |
 | QQ 音乐 | `/api/qq` | `x-qq-token` | 扫码 | 支持 | 支持 |
-| 酷狗音乐 | `/api/kugou` | `x-kugou-token` | 未实现 | 支持 | 支持（受版权限制） |
+| 酷狗音乐 | `/api/kugou` | `x-kugou-token` | 扫码（仅账号身份） | 支持 | 支持（受版权限制） |
 | 酷我音乐 | `/api/kuwo` | `x-kuwo-token` | 未实现 | 受上游风控影响 | 支持 |
 
 > **兼容性红线**：`/api/...` 必须继续等于网易云、`/api/qq/...` 必须继续等于 QQ 音乐。线上 VRChat 房间与播放器里已经签发的 M3U8 链接就是这个形状，改前缀等于全部失效。`cloudflare/tests/platforms.test.js` 的第一条测试锁定了这一点。
 
 ## 账号接入
 
-`account: true` 的平台有完整的账号体系：服务端保存加密 Cookie、有头像与昵称、能读用户歌单、能收藏、有播放记录。
+`account: true` 表示这个平台有登录入口：服务端保存加密 Cookie，并把账号身份挂到 `users` 行上。
 
-`account: false` 的平台**只有游客能力**：
+`library: true` 才表示有「我的音乐」——用户歌单、收藏、播放记录。两者不是同一件事：**酷狗可以扫码登录，但个人歌单与收藏尚未接入**（`account: true, library: false`）。
+
+`guestPlayback: true` 表示**未登录也能解析与播放**；登录只是补充账号身份，不是播放的前置条件。
+
+只有游客能力（`account: false`，酷我）的平台：
 
 - 不需要登录即可解析公开歌单并生成播放链接。
 - 没有 `users` 行，因此**没有个人歌单、收藏与播放记录**；`/api/<platform>/playlist/user`、`/favorites`、`/history/*` 一律返回 403 并附带原因；`/auth/*` 返回 501（`/auth/status` 除外，它返回 `{logged:false, supported:false}`）。
-- 播放链接是**无状态令牌**：载荷里 `u = 0`、`h = 'guest'`，只验 HMAC 不查库。这同时省掉了每个音频分片请求的一次 D1 读取。代价是没有「退出登录即撤销」——链接有效期内一直可用，与匿名分享链接等价。
+- 播放链接是**无状态令牌**：载荷里 `u = 0`、`h = 'guest'`，只验 HMAC 不查库。这同时省掉了每个音频分片请求的一次 D1 读取。代价是没有「退出登录即撤销」——链接有效期内一直可用，与匿名分享链接等价。未登录的酷狗同样走这条路径。
 - 播放记录不写 `play_stats`（没有 `users` 行，外键无法成立），但仍然写入 Analytics Engine，因此会计入「关于」页的匿名汇总。
 
 ### 酷狗的上游接口
@@ -34,7 +38,16 @@
 
 歌曲 ID 是**复合**的：`基础hash[-320hash[-sqhash]]`。M3U8 只带一个 ID，把三档 hash 一起编码进去，播放时才能按音质选择档位；缺失的档位直接省略。同一首歌在不同分页里可能带着不同的档位（有时只有基础 hash），所以去重按**基础 hash** 做，并把档位取并集。
 
-酷狗的 Web 播放接口（`wwwapi.kugou.com/yy/index.php?r=play/getdata`）要求 `signature` 参数，签名算法随前端发版变化，因此**没有接入官方账号**。付费曲目在游客视角下无法播放，播放器会给出统一的版权/VIP 提示。
+酷狗登录走 Web 扫码接口（`cloudflare/src/upstream/kugou-login.js`）：
+
+| 用途 | 接口 | 关键参数 |
+| --- | --- | --- |
+| 生成二维码 | `login-user.kugou.com/v2/qrcode` | `appid=1001`、`plat=4`、`srcappid=2919`、`qrcode_txt`、`mid`、`clienttime`、`signature` |
+| 轮询状态 | `login-user.kugou.com/v2/get_userinfo_qrcode` | `appid=1005`、`qrcode=<key>`，`data.status`：0 过期 / 1 等待 / 2 已扫待确认 / 4 确认并返回 `token`+`userid` |
+
+签名是 `md5(salt + 按 key 排序的 k=v 串 + body + salt)`，salt 为 `NVPh5oo715z5DIWAeQlhMDsWXXQV4hwt`；Workers 的 WebCrypto 不支持 MD5，因此仓库里带了一个纯 JS 实现（`src/upstream/md5.js`）。确认成功后只保存 `token` 与 `userid`，用户资料接口要求 RSA PKCS#1 v1.5，Worker 里没有实现。
+
+**登录不会提升音源**：移动端 `getSongInfo` 完全忽略登录态，要让会员/付费曲目可播得走 `/v5/url` 或 `/v6/priv_url`，而它们要求先做设备注册（AES-CBC + RSA PKCS#1 v1.5）。因此付费曲目仍然返回统一的版权/VIP 提示。
 
 ### 酷我的上游接口
 
@@ -84,8 +97,8 @@ users(id, platform, platform_user_id, ...)   UNIQUE (platform, platform_user_id)
 
 | 指标 | 来源 | 更新方式 |
 | --- | --- | --- |
-| 累计解析歌曲 | `site_stats.parsedSongs` | 生成链接时按歌单曲目数累加（实时） |
-| 生成链接 | `site_stats.generatedLinks` | 同上 |
+| 累计解析歌曲 | `site_stats.parsedSongs` | 每次解析歌单时按曲目数累加（实时） |
+| 生成链接 | `site_stats.generatedLinks` | 每次签发播放链接累加（实时） |
 | 累计播放 / 总播放时长 / 收录曲目 / 歌单数 | 从 `play_stats` 聚合 | cron 与惰性刷新，`STATS_REFRESH_MINUTES` 控制频率（默认 60） |
 | 使用人数 | `users` 行数 | 同上 |
 
@@ -93,8 +106,8 @@ users(id, platform, platform_user_id, ...)   UNIQUE (platform, platform_user_id)
 
 ## 新增一个平台要改什么
 
-1. **`cloudflare/src/platforms.js`**：加一项——路径前缀、鉴权头、`account` / `library` / `playback`、歌曲与歌单 ID 的正则、音频与封面域名白名单。
-2. **`cloudflare/src/upstream/<name>.js`**：实现 `getPlaylistDetail(playlistId, cookie, env)` 与 `getSongResource(songId, cookie, env)`，返回结构照抄现有适配器。
+1. **`cloudflare/src/platforms.js`**：加一项——路径前缀、鉴权头、`account` / `library` / `playback` / `guestPlayback`、歌曲与歌单 ID 的正则、音频与封面域名白名单。
+2. **`cloudflare/src/upstream/<name>.js`**：实现 `getPlaylistDetail(playlistId, cookie, env)` 与 `getSongResource(songId, cookie, env)`，返回结构照抄现有适配器；有登录能力的平台再导出 `createQRCode()`、`checkQRCode(key)`、`checkLoginStatus(cookie)`。
 3. **`cloudflare/src/playlists.js`**：`adapter()` 加一个分支；`PLAYLIST_URL_RULES` 与 `PLAYLIST_QUERY_KEYS` 加该平台的链接形状。
 4. **`web/src/lib/platform-data.js`**：加同名的一项，`label` / `account` / `library` / `playback` 必须与后端一致，否则 parity 测试会红。
 5. 跑 `npm test`（根目录与 `cloudflare/` 各一次）。路由、校验、遥测、音源白名单、前端入口都会跟着注册表走，不需要再改别处。

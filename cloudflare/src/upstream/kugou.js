@@ -4,12 +4,14 @@
 //   歌单读取 ✅  上游 m.kugou.com 的公开 JSON 接口，无需登录。
 //   音源解析 ⚠️  走移动端 getSongInfo，上游对需要付费/VIP 的曲目返回 "需要付费"，
 //                此时没有 URL，交给 player-policy 的降级链与提示处理。
-//   账号接入 ❌  酷狗的 Web 播放接口（wwwapi.kugou.com/yy/index.php?r=play/getdata）
-//                要求 signature 参数，签名算法随前端发版变化；官方账号接入未实现。
+//   账号接入 ✅  扫码登录（kugou-login.js）：只解决账号身份。移动端取链接口不读登录态，
+//                因此登录不会改变音源解析结果；会员曲目仍按游客接口的降级链处理。
 //
 // 免费额度约束：读歌单会扇出成多个子请求（1 次元数据 + 每页 1 次），
 // 默认上限 16 页 × 30 首 = 480 首、17 次子请求，离免费版的 50 次还有余量。
 // 可在 wrangler 里用 GUEST_PLAYLIST_MAX_PAGES 调整。
+
+import { checkLoginStatus, checkQRCode, createQRCode } from './kugou-login.js';
 
 const API_ORIGIN = 'https://m.kugou.com';
 const SONG_ORIGIN = 'https://mobiles.kugou.com';
@@ -221,4 +223,6 @@ async function getSongResource(songId, _cookie, env) {
   return null;
 }
 
-export { KugouError, getPlaylistDetail, getSongResource };
+export {
+  KugouError, checkLoginStatus, checkQRCode, createQRCode, getPlaylistDetail, getSongResource,
+};

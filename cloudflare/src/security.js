@@ -180,9 +180,10 @@ async function getPlaybackUser(env, token, platform, playlistId) {
       !Number.isFinite(payload.e) || payload.e <= Math.floor(Date.now() / 1000) ||
       typeof payload.h !== 'string'
     ) return null;
-    // 游客平台只验签，不查库：每个音频分片请求因此省掉一次 D1 读取
-    if (!PLATFORMS[platform]?.account) {
-      return payload.u === 0 && payload.h === GUEST_TOKEN_HASH ? guestUser(platform) : null;
+    // 游客令牌只验签，不查库：每个音频分片请求因此省掉一次 D1 读取。
+    // 不能按平台的 account 标记判断：酷狗可以登录，但未登录签发的仍是游客令牌。
+    if (payload.h === GUEST_TOKEN_HASH) {
+      return payload.u === 0 ? guestUser(platform) : null;
     }
     if (payload.u <= 0) return null;
     return env.DB.prepare(`

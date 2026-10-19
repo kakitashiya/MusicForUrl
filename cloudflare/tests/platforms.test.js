@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import worker from '../src/index.js';
 import policy from '../../lib/player-policy.js';
-import { createPlaybackToken, getPlaybackUser, getSessionUser } from '../src/security.js';
+import { createPlaybackToken, decryptCookie, getPlaybackUser, getSessionUser } from '../src/security.js';
 import { adapter, parsePlaylistId, validPlaylistId, validSongId } from '../src/playlists.js';
 import { PLATFORMS, capabilityMatrix, guestUser, platformFromPath } from '../src/platforms.js';
 import { routeKey } from '../src/telemetry.js';
@@ -102,10 +103,12 @@ test('capability matrix declares the account boundary for every platform', () =>
   assert.deepEqual(matrix.map(item => item.id), ['netease', 'qq', 'kugou', 'kuwo']);
   for (const item of matrix) {
     assert.equal(typeof item.label, 'string');
-    // 账号能力与「我的音乐」必须一致：没有账号就不可能有个人歌单
-    assert.equal(item.library, item.account, `${item.id}: library 与 account 必须一致`);
+    // 「我的音乐」必须以账号为前提；反方向不成立：酷狗可以登录，但个人歌单尚未接入
+    if (item.library) assert.equal(item.account, true, `${item.id}: library 必须以 account 为前提`);
   }
-  assert.equal(PLATFORMS.kugou.account, false);
+  assert.equal(PLATFORMS.kugou.account, true);
+  assert.equal(PLATFORMS.kugou.library, false);
+  assert.equal(PLATFORMS.kugou.guestPlayback, true);
   assert.equal(PLATFORMS.kuwo.account, false);
   assert.equal(PLATFORMS.kugou.playback, true);
 });
@@ -298,7 +301,7 @@ test('guest platforms reject the account-only routes with an actionable message'
   for (const path of ['/api/kugou/playlist/user', '/api/kuwo/favorites', '/api/kugou/history/recent']) {
     const response = await worker.fetch(new Request(`https://music.example.test${path}`), env, ctx);
     assert.equal(response.status, 403, path);
-    assert.match((await response.json()).message, /没有账号体系/);
+    assert.match((await response.json()).message, /暂不支持个人歌单/);
   }
   const auth = await worker.fetch(new Request('https://music.example.test/api/kuwo/auth/status'), env, ctx);
   const body = await auth.json();
@@ -306,6 +309,65 @@ test('guest platforms reject the account-only routes with an actionable message'
   assert.equal(body.data.supported, false);
   const login = await worker.fetch(new Request('https://music.example.test/api/kuwo/auth/qrcode'), env, ctx);
   assert.equal(login.status, 501);
+});
+
+test('kugou QR login signs requests, maps poll states and stores the session', async t => {
+  const env = testEnv(); t.after(() => env.sqlite.close());
+  const ctx = { waitUntil() {} };
+  let poll = { status: 1 };
+  const restore = stubFetch([
+    [/login-user\.kugou\.com\/v2\/qrcode\?/, () => json({
+      status: 1, error_code: 0,
+      data: { qrcode: 'QRKEY123', qrcode_img: 'data:image/png;base64,AAA' },
+    })],
+    [/login-user\.kugou\.com\/v2\/get_userinfo_qrcode\?/, () => json({ status: 1, error_code: 0, data: poll })],
+  ]);
+  t.after(restore.restore);
+
+  const created = await worker.fetch(new Request('https://music.example.test/api/kugou/auth/qrcode'), env, ctx);
+  const createdBody = await created.json();
+  assert.equal(created.status, 200);
+  assert.equal(createdBody.data.key, 'QRKEY123');
+  assert.match(createdBody.data.qrimg, /^data:image\/png;base64,/);
+
+  // 用 node:crypto 独立复算签名，锁住「salt + 排序参数 + salt」的算法
+  const url = new URL(restore.calls[0]);
+  const params = Object.fromEntries(url.searchParams);
+  const received = params.signature;
+  delete params.signature;
+  const expected = createHash('md5')
+    .update(`NVPh5oo715z5DIWAeQlhMDsWXXQV4hwt${Object.keys(params).sort().map(key => `${key}=${params[key]}`).join('')}NVPh5oo715z5DIWAeQlhMDsWXXQV4hwt`)
+    .digest('hex');
+  assert.equal(received, expected);
+  assert.equal(params.appid, '1001');
+  assert.equal(params.qrcode_txt, 'https://h5.kugou.com/apps/loginQRCode/html/index.html?appid=1005&');
+
+  const check = () => worker.fetch(
+    new Request('https://music.example.test/api/kugou/auth/qrcode/check?key=QRKEY123'), env, ctx,
+  );
+  assert.equal((await (await check()).json()).code, 801);
+  poll = { status: 2 };
+  assert.equal((await (await check()).json()).code, 802);
+  poll = { status: 0 };
+  assert.equal((await (await check()).json()).code, 800);
+
+  poll = { status: 4, token: 'kugou-token', userid: '424242' };
+  const success = await (await check()).json();
+  assert.equal(success.code, 803);
+  assert.equal(success.data.user.userId, '424242');
+
+  const sessionRequest = new Request('https://music.example.test/api/kugou/auth/status', {
+    headers: { 'x-kugou-token': success.data.token },
+  });
+  const user = await getSessionUser(env, sessionRequest, 'kugou');
+  assert.equal(user.platform_user_id, '424242');
+  assert.equal(user.guest, undefined);
+  const cookie = await decryptCookie(env, user);
+  assert.match(cookie, /token=kugou-token/);
+  assert.match(cookie, /userid=424242/);
+
+  // 二维码确认后立即失效
+  assert.equal((await check()).status, 400);
 });
 
 test('site stats are aggregated from play history and account count', async t => {

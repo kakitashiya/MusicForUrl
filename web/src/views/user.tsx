@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { ChevronLeft, ChevronRight, Link2, Trash2 } from 'lucide-react';
 import { api } from '@/lib/api';
-import { ACCOUNT_PLATFORMS, platformInfo } from '@/lib/platforms';
+import { PLATFORMS, platformInfo } from '@/lib/platforms';
 import type { FavoriteItem, HistoryItem, Paged, PlaylistSummary, TopSong } from '@/lib/types';
 import { formatDateTime, imageSrc } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -18,6 +18,9 @@ import { usePlayer } from '@/stores/player';
 import { useUi } from '@/stores/ui';
 
 const PAGE_SIZE = 18;
+
+// 「我的音乐」只属于有歌单/收藏能力的平台；酷狗可以登录，但暂不提供个人歌单。
+const LIBRARY_PLATFORMS = PLATFORMS.filter(item => item.library);
 
 function usePagedList<T>(
   queryKey: unknown[],
@@ -110,7 +113,7 @@ export function UserView() {
             ariaLabel="音乐平台"
             value={platform}
             onChange={setPlatform}
-            options={ACCOUNT_PLATFORMS.map(item => ({ value: item.id, label: item.short }))}
+            options={LIBRARY_PLATFORMS.map(item => ({ value: item.id, label: item.short }))}
           />
         )}
       />

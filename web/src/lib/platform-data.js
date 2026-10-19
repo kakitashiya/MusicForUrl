@@ -30,10 +30,10 @@ export const PLATFORM_TABLE = [
     id: 'kugou',
     label: '酷狗音乐',
     short: '酷狗',
-    account: false,
+    account: true,
     library: false,
     playback: true,
-    note: '免登录读取公开歌单；音源受版权与会员限制，需要付费的曲目无法播放。',
+    note: '支持扫码登录；免登录也能读取公开歌单与音源。个人歌单与会员音源尚未接入。',
   },
   {
     id: 'kuwo',
