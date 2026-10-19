@@ -5,8 +5,7 @@ import { toast } from 'sonner';
 import { ChevronLeft, ChevronRight, Link2, Trash2 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { ACCOUNT_PLATFORMS, platformInfo } from '@/lib/platforms';
-import { readPersonalPlatform, writePersonalPlatform } from '@/lib/storage';
-import type { FavoriteItem, HistoryItem, Paged, Platform, PlaylistSummary, TopSong } from '@/lib/types';
+import type { FavoriteItem, HistoryItem, Paged, PlaylistSummary, TopSong } from '@/lib/types';
 import { formatDateTime, imageSrc } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/input';
@@ -70,11 +69,8 @@ function GridSkeleton({ count = 6 }: { count?: number }) {
 }
 
 export function UserView() {
-  const [platform, setPlatform] = React.useState<Platform>(() => {
-    const remembered = readPersonalPlatform();
-    // 只保留有账号能力的平台：酷狗/酷我没有个人数据可言
-    return remembered && ACCOUNT_PLATFORMS.some(item => item.id === remembered) ? remembered : 'netease';
-  });
+  const platform = useUi(state => state.personalPlatform);
+  const setPlatform = useUi(state => state.setPersonalPlatform);
   const users = useAuth(state => state.users);
   const openLogin = useUi(state => state.openLogin);
   const openPlaylist = usePlayer(state => state.open);
@@ -82,7 +78,6 @@ export function UserView() {
   const user = users[platform];
   const loggedIn = !!user;
 
-  React.useEffect(() => { writePersonalPlatform(platform); }, [platform]);
 
   const playlists = usePagedList<PlaylistSummary>(
     ['playlists', platform], (offset, limit) => api.userPlaylists(platform, offset, limit), loggedIn,

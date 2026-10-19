@@ -248,39 +248,6 @@ export function AccountsView() {
         description="Cookie 在服务端加密保存。每个平台可以记住多个账号，同一时间只有一个生效。"
       />
 
-      {/* 多账号的数据归属规则：与其让用户猜，不如直接写清楚 */}
-      <section className="rounded-xl border border-border bg-card p-4 shadow-[var(--shadow-card)]">
-        <h2 className="flex items-center gap-2 text-[14px] font-semibold">
-          <Users className="size-4 text-primary" />多账号的数据归属
-        </h2>
-        <ul className="mt-2.5 grid gap-2 text-[12.5px] text-muted-foreground lg:grid-cols-2">
-          <li>
-            <strong className="font-medium text-foreground">按账号隔离。</strong>
-            歌单缓存、收藏与播放记录的主键都以账号为单位，换账号就等于换一份数据，不会串号，也不会互相覆盖。
-          </li>
-          <li>
-            <strong className="font-medium text-foreground">跨平台不混合。</strong>
-            网易云与 QQ 音乐各自独立统计；「我的音乐」只显示当前选中平台、当前生效账号的数据。
-          </li>
-          <li>
-            <strong className="font-medium text-foreground">切换即切换视图。</strong>
-            切换账号后，歌单、收藏与播放记录会立即换成该账号的数据；原账号的数据保留在它自己名下，随时可以切回。
-          </li>
-          <li>
-            <strong className="font-medium text-foreground">链接跟随账号。</strong>
-            播放链接绑定签发它的账号，退出登录会立即撤销；切换账号不会影响已签发的链接。
-          </li>
-          <li>
-            <strong className="font-medium text-foreground">关于页是汇总口径。</strong>
-            「关于」里的累计解析数、播放时长与使用人数是全站汇总，不区分账号，也不包含任何个人信息。
-          </li>
-          <li>
-            <strong className="font-medium text-foreground">游客平台不参与。</strong>
-            酷狗与酷我免登录使用，因此没有账号维度，播放只计入匿名汇总。
-          </li>
-        </ul>
-      </section>
-
       <div className="grid gap-4 lg:grid-cols-2">
         {ACCOUNT_PLATFORMS.map(item => <AccountCard key={item.id} platform={item.id} />)}
         {PLATFORMS.filter(item => !item.account).map(item => (

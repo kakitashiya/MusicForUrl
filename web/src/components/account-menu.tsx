@@ -153,7 +153,7 @@ export function AccountMenu() {
               onClick={() => setOpen(false)}
               className="inline-flex items-center gap-1.5 text-[12.5px] font-medium text-primary hover:underline"
             >
-              <Settings2 className="size-3.5" />管理账号与数据归属
+              <Settings2 className="size-3.5" />管理账号
             </Link>
           </div>
         </div>
