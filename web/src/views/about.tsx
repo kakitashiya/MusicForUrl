@@ -111,7 +111,7 @@ export function AboutView() {
           <Stat
             label="累计解析歌曲"
             value={`${formatCount(data?.parsedSongs ?? 0)} 首`}
-            hint="按每次解析到的歌单曲目数累加"
+            hint="自 2.1.0 起，按每次解析到的歌单曲目数累加"
             loading={loading}
           />
           <Stat
@@ -135,7 +135,7 @@ export function AboutView() {
           <Stat
             label="生成链接"
             value={`${formatCount(data?.generatedLinks ?? 0)} 个`}
-            hint="成功签发的播放链接"
+            hint="自 2.1.0 起成功签发的播放链接"
             loading={loading}
             wide
           />
