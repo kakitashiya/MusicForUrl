@@ -1,10 +1,11 @@
 import * as React from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { AppShell } from '@/components/app-shell';
+import { HomeView } from '@/views/home';
 import { VIEW_TITLES, routeFromPath } from '@/lib/routes';
 
-// 逐视图分包：静态资源在 Cloudflare 免费且不限量，这里优化的是首屏体积
-const HomeView = React.lazy(() => import('@/views/home').then(module => ({ default: module.HomeView })));
+// 首页是默认入口，直接放进主包，省掉「主包 → 路由 chunk」的一次串行请求。
+// 其余视图继续按需加载。
 const UserView = React.lazy(() => import('@/views/user').then(module => ({ default: module.UserView })));
 const AccountsView = React.lazy(() => import('@/views/accounts').then(module => ({ default: module.AccountsView })));
 const PreviewView = React.lazy(() => import('@/views/preview').then(module => ({ default: module.PreviewView })));

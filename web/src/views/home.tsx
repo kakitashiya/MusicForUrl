@@ -226,7 +226,7 @@ export function HomeView() {
             <button
               type="submit"
               disabled={busy}
-              className="h-[52px] shrink-0 rounded-xl bg-white px-8 text-sm font-bold text-[var(--hero-mid)] shadow-lg transition-transform hover:-translate-y-px disabled:opacity-70"
+              className="h-[52px] shrink-0 rounded-xl bg-white px-8 text-sm font-semibold text-[var(--hero-mid)] shadow-lg transition-transform hover:-translate-y-px disabled:opacity-70"
             >
               {busy ? '生成中…' : '生成链接'}
             </button>

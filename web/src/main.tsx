@@ -2,12 +2,16 @@ import * as React from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { LazyMotion, MotionConfig, domMax } from 'motion/react';
+import { LazyMotion, MotionConfig } from 'motion/react';
 import { Toaster } from 'sonner';
 import App from './App';
 import { useAuth } from './stores/auth';
 import { useTheme } from './stores/theme';
+import './fonts.css';
 import './index.css';
+
+// domMax 只在需要布局动画时才有用，异步加载可以把它移出首屏关键路径
+const loadMotionFeatures = () => import('./motion/features').then(module => module.default);
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -36,9 +40,9 @@ createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       {/* reducedMotion="user" 跟随系统设置，CSS 层另外尊重 dataset.motion。
-          domMax 提供布局动画，分段控件的 layoutId 滑块依赖它。 */}
+          features 异步加载，首屏只承担 motion 核心，domMax 随后补齐。 */}
       <MotionConfig reducedMotion="user">
-        <LazyMotion features={domMax} strict>
+        <LazyMotion features={loadMotionFeatures} strict>
           <BrowserRouter>
             <Bootstrap />
             <Toaster position="top-center" richColors />

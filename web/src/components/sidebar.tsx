@@ -137,7 +137,8 @@ export function Sidebar() {
       style={{ '--rail-width': `${showExpanded ? EXPANDED_WIDTH : COLLAPSED_WIDTH}px` } as React.CSSProperties}
       className={cn(
         'flex shrink-0 items-center gap-1 bg-rail px-3 py-2',
-        'md:h-full md:flex-col md:items-stretch md:gap-1 md:px-3 md:py-4',
+        'md:h-full md:flex-col md:gap-1 md:px-3 md:py-4',
+        showExpanded ? 'md:items-stretch' : 'md:items-center',
         'md:w-[var(--rail-width)] md:transition-[width] md:duration-[250ms] md:ease-[cubic-bezier(0.4,0,0.2,1)]',
       )}
     >

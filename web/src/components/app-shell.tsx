@@ -2,14 +2,28 @@ import * as React from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { Sidebar } from '@/components/sidebar';
 import { Topbar } from '@/components/topbar';
-import { LoginDialog } from '@/components/login-dialog';
-import { MiniPlayer } from '@/components/mini-player';
 import { PageTransition } from '@/motion/primitives';
 import { Skeleton } from '@/components/ui/input';
 import { useAuth } from '@/stores/auth';
+import { usePlayer } from '@/stores/player';
 import { useTheme } from '@/stores/theme';
 import { useUi } from '@/stores/ui';
 import { routeFromPath } from '@/lib/routes';
+
+// 播放条只有真正打开歌单后才出现，连同它的 Radix Select 一起按需加载
+const MiniPlayer = React.lazy(() => import('@/components/mini-player').then(module => ({ default: module.MiniPlayer })));
+// 登录弹窗只在点击后出现，没必要和首屏一起下载
+const LoginDialog = React.lazy(() => import('@/components/login-dialog').then(module => ({ default: module.LoginDialog })));
+
+function PlayerSlot() {
+  const hasPlaylist = usePlayer(state => !!state.playlist);
+  if (!hasPlaylist) return null;
+  return (
+    <React.Suspense fallback={null}>
+      <MiniPlayer />
+    </React.Suspense>
+  );
+}
 
 /**
  * 应用外壳。四块区域的层级是固定的：
@@ -28,6 +42,7 @@ export function AppShell() {
   const applyTheme = useTheme(state => state.apply);
   const refreshAll = useAuth(state => state.refreshAll);
   const setSidebar = useUi(state => state.setSidebar);
+  const loginOpen = useUi(state => state.loginOpen);
 
   // 主题与账号状态只在挂载时同步一次，避免每次路由切换都打一次 /auth/status
   React.useEffect(() => { applyTheme(); }, [applyTheme]);
@@ -57,10 +72,14 @@ export function AppShell() {
           </PageTransition>
         </main>
 
-        <MiniPlayer />
+        <PlayerSlot />
       </div>
 
-      <LoginDialog />
+      {loginOpen && (
+        <React.Suspense fallback={null}>
+          <LoginDialog />
+        </React.Suspense>
+      )}
     </div>
   );
 }
