@@ -109,7 +109,9 @@ test('capability matrix declares the account boundary for every platform', () =>
   assert.equal(PLATFORMS.kugou.account, true);
   assert.equal(PLATFORMS.kugou.library, false);
   assert.equal(PLATFORMS.kugou.guestPlayback, true);
-  assert.equal(PLATFORMS.kuwo.account, false);
+  assert.equal(PLATFORMS.kuwo.account, true);
+  assert.equal(PLATFORMS.kuwo.library, false);
+  assert.equal(PLATFORMS.kuwo.guestPlayback, true);
   assert.equal(PLATFORMS.kugou.playback, true);
 });
 
@@ -306,7 +308,8 @@ test('guest platforms reject the account-only routes with an actionable message'
   const auth = await worker.fetch(new Request('https://music.example.test/api/kuwo/auth/status'), env, ctx);
   const body = await auth.json();
   assert.equal(body.data.logged, false);
-  assert.equal(body.data.supported, false);
+  // 酷我支持账号密码 / 短信登录，但没有扫码
+  assert.equal(body.data.supported, undefined);
   const login = await worker.fetch(new Request('https://music.example.test/api/kuwo/auth/qrcode'), env, ctx);
   assert.equal(login.status, 501);
 });
@@ -368,6 +371,78 @@ test('kugou QR login signs requests, maps poll states and stores the session', a
 
   // 二维码确认后立即失效
   assert.equal((await check()).status, 400);
+});
+
+test('kuwo password and SMS login map upstream cookies into a session', async t => {
+  const env = testEnv(); t.after(() => env.sqlite.close());
+  const ctx = { waitUntil() {} };
+  const bodies = [];
+  const restore = stubFetch([
+    [/www\.kuwo\.cn\/api\/common\/captcha\/getcode$/, () => new Response(JSON.stringify({
+      code: 200, data: { img: 'data:image/png;base64,AAA', token: 'captcha-token' },
+    }), { headers: { 'content-type': 'application/json', 'set-cookie': 'Hm_Iuvt_x=anon; path=/; HttpOnly' } })],
+    [/wapi\.kuwo\.cn\/api\/www\/login\/loginByKw\?/, (url, init) => {
+      const body = JSON.parse(init.body);
+      bodies.push(body);
+      if (body.uname === 'bad') return json({ code: -10001, msg: '用户名或密码错误' });
+      return json({ code: 200, data: { cookies: {
+        userid: '777', uname3: '%E5%B0%8F%E6%98%8E', pic3: 'https%3A%2F%2Fimg.example%2Fa.png', sid: 'S1',
+      } } });
+    }],
+    [/www\.kuwo\.cn\/api\/sms\/mobileLoginCode\?/, () => json({ code: 200, data: { tm: 'TM1' } })],
+    [/wapi\.kuwo\.cn\/api\/www\/login\/loginByMobile\?/, (url, init) => {
+      bodies.push(JSON.parse(init.body));
+      return json({ code: 200, data: { cookies: { userid: '888', uname3: 'kw-user', sid: 'S2' } } });
+    }],
+  ]);
+  t.after(restore.restore);
+
+  const captcha = await worker.fetch(new Request('https://music.example.test/api/kuwo/auth/captcha'), env, ctx);
+  const captchaBody = await captcha.json();
+  assert.equal(captcha.status, 200);
+  assert.equal(captchaBody.data.token, 'captcha-token');
+  assert.equal(captchaBody.data.cookie, 'Hm_Iuvt_x=anon');
+
+  const call = (path, body) => worker.fetch(new Request(`https://music.example.test/api/kuwo${path}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  }), env, ctx);
+
+  const bad = await call('/auth/login/password', {
+    uname: 'bad', password: 'x', verifyCode: 'ab12', verifyCodeToken: 'captcha-token', cookie: 'Hm_Iuvt_x=anon',
+  });
+  assert.equal(bad.status, 401);
+  assert.match((await bad.json()).message, /用户名或密码错误/);
+
+  const login = await call('/auth/login/password', {
+    uname: 'good', password: 'secret', verifyCode: 'ab12', verifyCodeToken: 'captcha-token', cookie: 'Hm_Iuvt_x=anon',
+  });
+  const loginBody = await login.json();
+  assert.equal(login.status, 200);
+  assert.equal(loginBody.data.user.userId, '777');
+  assert.equal(loginBody.data.user.nickname, '小明');
+  assert.equal(loginBody.data.user.avatar, 'https://img.example/a.png');
+  assert.equal(bodies[1].verifyCodeToken, 'captcha-token');
+  assert.equal(bodies[1].verifyCode, 'ab12');
+
+  const session = new Request('https://music.example.test/api/kuwo/auth/status', {
+    headers: { 'x-kuwo-token': loginBody.data.token },
+  });
+  const user = await getSessionUser(env, session, 'kuwo');
+  assert.equal(user.platform_user_id, '777');
+  assert.match(await decryptCookie(env, user), /sid=S1/);
+
+  const sent = await call('/auth/sms/send', {
+    mobile: '13800138000', verifyCode: 'cd34', verifyCodeToken: 'captcha-token', cookie: 'Hm_Iuvt_x=anon',
+  });
+  assert.equal((await sent.json()).data.tm, 'TM1');
+  const smsLogin = await call('/auth/login/sms', {
+    mobile: '13800138000', verifyCode: 'cd34', smsCode: '123456', tm: 'TM1', cookie: 'Hm_Iuvt_x=anon',
+  });
+  const smsBody = await smsLogin.json();
+  assert.equal(smsLogin.status, 200);
+  assert.equal(smsBody.data.user.userId, '888');
+  assert.equal(smsBody.data.user.nickname, 'kw-user');
+  assert.equal(bodies.at(-1).tm, 'TM1');
 });
 
 test('site stats are aggregated from play history and account count', async t => {

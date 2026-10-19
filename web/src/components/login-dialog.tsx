@@ -215,6 +215,191 @@ function CookiePanel({ platform, onSuccess }: {
   );
 }
 
+type KuwoCaptchaState = { img: string; token: string; cookie: string };
+
+/** 酷我的图形验证码与匿名会话 Cookie 绑定，token 与 cookie 必须原样带回登录请求。 */
+function useKuwoCaptcha() {
+  const [captcha, setCaptcha] = React.useState<KuwoCaptchaState | null>(null);
+  const [loading, setLoading] = React.useState(false);
+
+  const refresh = React.useCallback(async () => {
+    setLoading(true);
+    try {
+      setCaptcha(await api.authCaptcha('kuwo'));
+    } catch (error) {
+      setCaptcha(null);
+      toast.error(error instanceof Error ? error.message : '获取验证码失败');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => { void refresh(); }, [refresh]);
+  return { captcha, loading, refresh };
+}
+
+function CaptchaField({ captcha, loading, onRefresh }: {
+  captcha: KuwoCaptchaState | null;
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={onRefresh}
+        title="点击刷新验证码"
+        className="flex h-9 w-[125px] items-center justify-center overflow-hidden rounded-md border border-border bg-card"
+      >
+        {captcha
+          ? <img src={captcha.img} alt="图形验证码" className="h-full w-full object-cover" />
+          : <span className="text-[11.5px] text-muted-foreground">{loading ? '加载中…' : '点击重试'}</span>}
+      </button>
+      <span className="text-[11.5px] text-muted-foreground">字母区分大小写，点击图片可刷新</span>
+    </div>
+  );
+}
+
+function KuwoPasswordPanel({ onSuccess }: {
+  onSuccess: (token: string, user: AccountUser) => void;
+}) {
+  const { captcha, loading, refresh } = useKuwoCaptcha();
+  const [uname, setUname] = React.useState('');
+  const [password, setPassword] = React.useState('');
+  const [verifyCode, setVerifyCode] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!captcha) { toast.error('验证码未加载，请点击图片刷新'); return; }
+    setBusy(true);
+    try {
+      const { token, user } = await api.loginByPassword('kuwo', {
+        uname: uname.trim(), password, verifyCode: verifyCode.trim(),
+        verifyCodeToken: captcha.token, cookie: captcha.cookie,
+      });
+      onSuccess(token, user);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '登录失败');
+      setVerifyCode('');
+      void refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="flex flex-col gap-3" onSubmit={submit}>
+      <div className="space-y-1.5">
+        <Label htmlFor="kuwo-uname">酷我账号</Label>
+        <Input id="kuwo-uname" value={uname} onChange={event => setUname(event.target.value)}
+          autoComplete="username" placeholder="手机号或邮箱" />
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="kuwo-password">密码</Label>
+        <Input id="kuwo-password" type="password" value={password}
+          onChange={event => setPassword(event.target.value)} autoComplete="current-password" />
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="kuwo-code">图形验证码</Label>
+        <Input id="kuwo-code" value={verifyCode} onChange={event => setVerifyCode(event.target.value)}
+          autoComplete="off" maxLength={8} />
+        <CaptchaField captcha={captcha} loading={loading} onRefresh={() => void refresh()} />
+      </div>
+      <Button type="submit" disabled={busy || !captcha}>
+        {busy ? '登录中…' : '登录'}
+      </Button>
+    </form>
+  );
+}
+
+function KuwoSmsPanel({ onSuccess }: {
+  onSuccess: (token: string, user: AccountUser) => void;
+}) {
+  const { captcha, loading, refresh } = useKuwoCaptcha();
+  const [mobile, setMobile] = React.useState('');
+  const [verifyCode, setVerifyCode] = React.useState('');
+  const [smsCode, setSmsCode] = React.useState('');
+  const [tm, setTm] = React.useState('');
+  const [sending, setSending] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  const [cooldown, setCooldown] = React.useState(0);
+
+  React.useEffect(() => {
+    if (cooldown <= 0) return;
+    const timer = window.setTimeout(() => setCooldown(value => value - 1), 1000);
+    return () => window.clearTimeout(timer);
+  }, [cooldown]);
+
+  async function send() {
+    if (!captcha) { toast.error('验证码未加载，请点击图片刷新'); return; }
+    if (!/^1\d{10}$/.test(mobile.trim())) { toast.error('请输入 11 位中国大陆手机号'); return; }
+    setSending(true);
+    try {
+      const result = await api.sendLoginSms('kuwo', {
+        mobile: mobile.trim(), verifyCode: verifyCode.trim(),
+        verifyCodeToken: captcha.token, cookie: captcha.cookie,
+      });
+      setTm(result.tm);
+      setCooldown(60);
+      toast.success('短信验证码已发送');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '发送失败');
+      void refresh();
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!captcha) { toast.error('验证码已失效，请刷新'); return; }
+    if (!tm) { toast.error('请先获取短信验证码'); return; }
+    setBusy(true);
+    try {
+      const { token, user } = await api.loginBySms('kuwo', {
+        mobile: mobile.trim(), verifyCode: verifyCode.trim(), smsCode: smsCode.trim(),
+        tm, cookie: captcha.cookie,
+      });
+      onSuccess(token, user);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '登录失败');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="flex flex-col gap-3" onSubmit={submit}>
+      <div className="space-y-1.5">
+        <Label htmlFor="kuwo-mobile">手机号</Label>
+        <Input id="kuwo-mobile" value={mobile} onChange={event => setMobile(event.target.value)}
+          autoComplete="tel" inputMode="numeric" placeholder="11 位手机号" />
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="kuwo-sms-code">图形验证码</Label>
+        <div className="flex gap-2">
+          <Input id="kuwo-sms-code" value={verifyCode} onChange={event => setVerifyCode(event.target.value)}
+            autoComplete="off" maxLength={8} className="flex-1" />
+          <Button type="button" variant="outline" disabled={sending || cooldown > 0 || !captcha}
+            onClick={() => void send()}>
+            {cooldown > 0 ? `${cooldown}s 后重发` : sending ? '发送中…' : '发送验证码'}
+          </Button>
+        </div>
+        <CaptchaField captcha={captcha} loading={loading} onRefresh={() => void refresh()} />
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="kuwo-sms">短信验证码</Label>
+        <Input id="kuwo-sms" value={smsCode} onChange={event => setSmsCode(event.target.value)}
+          autoComplete="one-time-code" inputMode="numeric" maxLength={8} />
+      </div>
+      <Button type="submit" disabled={busy || !tm}>
+        {busy ? '登录中…' : '登录'}
+      </Button>
+    </form>
+  );
+}
+
 export function LoginDialog() {
   const open = useUi(state => state.loginOpen);
   const platform = useUi(state => state.loginPlatform);
@@ -268,13 +453,22 @@ export function LoginDialog() {
             <TabsContent value="password"><PasswordPanel platform="netease" onSuccess={handlers.netease} /></TabsContent>
             <TabsContent value="cookie"><CookiePanel platform="netease" onSuccess={handlers.netease} /></TabsContent>
           </Tabs>
+        ) : active === 'kuwo' ? (
+          <Tabs defaultValue="password">
+            <TabsList className="w-full">
+              <TabsTrigger value="password">账号密码</TabsTrigger>
+              <TabsTrigger value="sms">手机短信</TabsTrigger>
+            </TabsList>
+            <TabsContent value="password"><KuwoPasswordPanel onSuccess={handlers.kuwo} /></TabsContent>
+            <TabsContent value="sms"><KuwoSmsPanel onSuccess={handlers.kuwo} /></TabsContent>
+          </Tabs>
         ) : (
           <QrPanel platform={active} onSuccess={handlers[active]} />
         )}
 
         <p className="mt-4 border-t border-border pt-3 text-[12px] text-muted-foreground">
-          酷狗支持扫码登录，但登录只用于账号身份，歌单与音源仍走公开接口，不提供个人歌单与收藏。
-          酷我暂时没有可用的扫码登录接口，因此只保留免登录播放。
+          酷狗支持扫码登录，酷我支持账号密码 / 手机短信登录；登录只用于账号身份，
+          歌单与音源仍走公开接口，暂不提供个人歌单、收藏与会员音源。
         </p>
       </DialogContent>
     </Dialog>

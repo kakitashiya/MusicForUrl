@@ -123,7 +123,7 @@ async function saveLogin(env, platform, profile, cookie, code) {
 
 async function accountStatus(platform, cookie) {
   if (platform === 'qq') return qqmusic.checkLoginStatus(cookie);
-  if (platform === 'kugou') return adapter(platform).checkLoginStatus(cookie);
+  if (platform === 'kugou' || platform === 'kuwo') return adapter(platform).checkLoginStatus(cookie);
   return netease.checkLoginStatus(cookie);
 }
 
@@ -156,6 +156,7 @@ async function authRoute(request, env, platform, path, url) {
   }
 
   if (method === 'GET' && path === '/qrcode') {
+    if (!upstream.createQRCode) return fail('该平台不支持扫码登录', 501);
     const result = await upstream.createQRCode();
     const key = platform === 'qq' ? result.qrsig : result.key;
     if (!key || !result.qrimg) return fail('获取二维码失败', 502);
@@ -170,6 +171,7 @@ async function authRoute(request, env, platform, path, url) {
   }
 
   if (method === 'GET' && path === '/qrcode/check') {
+    if (!upstream.checkQRCode) return fail('该平台不支持扫码登录', 501);
     const key = String(url.searchParams.get('key') || '');
     if (!key || key.length > 512) return fail('二维码已过期，请刷新');
     const keyHash = await sha256Hex(key);
@@ -235,6 +237,57 @@ async function authRoute(request, env, platform, path, url) {
     if (!/^\d{6,20}$/.test(String(phone || ''))) return fail('请输入有效手机号');
     const sent = await netease.sendCaptcha(String(phone));
     return json({ success: sent, message: sent ? '验证码已发送' : '发送失败' });
+  }
+
+  if (platform === 'kuwo' && method === 'GET' && path === '/captcha') {
+    return json({ success: true, data: await upstream.captcha() });
+  }
+
+  if (platform === 'kuwo' && method === 'POST' && path === '/login/password') {
+    const body = await bodyJson(request);
+    const uname = String(body.uname || '').trim();
+    const password = String(body.password || '');
+    const verifyCode = String(body.verifyCode || '').trim();
+    const verifyCodeToken = String(body.verifyCodeToken || '').trim();
+    const cookie = String(body.cookie || '');
+    if (!uname || uname.length > 100 || !password || password.length > 200) {
+      return fail('请输入酷我账号和密码');
+    }
+    if (!verifyCode || verifyCode.length > 8) return fail('请输入图形验证码');
+    if (!verifyCodeToken || verifyCodeToken.length > 128) return fail('图形验证码已失效，请刷新');
+    if (cookie.length > 2000) return fail('登录会话无效，请刷新验证码');
+    const result = await upstream.loginByPassword({ uname, password, verifyCode, verifyCodeToken, cookie });
+    return saveLogin(env, platform, result.profile, result.cookie);
+  }
+
+  if (platform === 'kuwo' && method === 'POST' && path === '/sms/send') {
+    const body = await bodyJson(request);
+    const mobile = String(body.mobile || '').trim();
+    const verifyCode = String(body.verifyCode || '').trim();
+    const verifyCodeToken = String(body.verifyCodeToken || '').trim();
+    const cookie = String(body.cookie || '');
+    if (!/^1\d{10}$/.test(mobile)) return fail('请输入 11 位中国大陆手机号');
+    if (!verifyCode || verifyCode.length > 8) return fail('请输入图形验证码');
+    if (!verifyCodeToken || verifyCodeToken.length > 128) return fail('图形验证码已失效，请刷新');
+    if (cookie.length > 2000) return fail('登录会话无效，请刷新验证码');
+    const result = await upstream.sendSms({ mobile, verifyCode, verifyCodeToken, cookie });
+    return json({ success: true, data: result });
+  }
+
+  if (platform === 'kuwo' && method === 'POST' && path === '/login/sms') {
+    const body = await bodyJson(request);
+    const mobile = String(body.mobile || '').trim();
+    const verifyCode = String(body.verifyCode || '').trim();
+    const smsCode = String(body.smsCode || '').trim();
+    const tm = String(body.tm || '').trim();
+    const cookie = String(body.cookie || '');
+    if (!/^1\d{10}$/.test(mobile)) return fail('请输入 11 位中国大陆手机号');
+    if (!verifyCode || verifyCode.length > 8) return fail('请输入图形验证码');
+    if (!/^\d{4,8}$/.test(smsCode)) return fail('请输入短信验证码');
+    if (tm.length > 200) return fail('短信验证失效，请重新发送');
+    if (cookie.length > 2000) return fail('登录会话无效，请刷新验证码');
+    const result = await upstream.loginBySms({ mobile, verifyCode, smsCode, tm, cookie });
+    return saveLogin(env, platform, result.profile, result.cookie);
   }
 
   if (platform === 'netease' && method === 'POST' && ['/login/captcha', '/login/password'].includes(path)) {

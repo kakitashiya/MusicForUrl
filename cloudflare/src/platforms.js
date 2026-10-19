@@ -62,14 +62,14 @@ const PLATFORMS = {
     imageHosts: /(^|\.)(kugou\.com|kgimg\.com|kglink\.cn)$/,
   },
 
-  // 酷我：站点没有扫码登录接口（只有账号密码 / 短信 / 微信 OAuth），
-  // 因此保持纯游客能力；未登录照常解析与播放。
+  // 酷我：站点没有扫码登录，走账号密码 / 手机短信（kuwo-login.js）。
+  // 与酷狗一样，登录只解决账号身份，未登录照常解析与播放。
   kuwo: {
     id: 'kuwo',
     label: '酷我音乐',
     prefix: '/api/kuwo',
     tokenHeader: 'x-kuwo-token',
-    account: false,
+    account: true,
     library: false,
     playback: true,
     guestPlayback: true,

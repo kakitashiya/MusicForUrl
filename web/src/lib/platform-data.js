@@ -39,9 +39,9 @@ export const PLATFORM_TABLE = [
     id: 'kuwo',
     label: '酷我音乐',
     short: '酷我',
-    account: false,
+    account: true,
     library: false,
     playback: true,
-    note: '免登录解析音源；歌单接口有风控，可能间歇性不可用。',
+    note: '支持账号密码 / 手机短信登录；免登录也能解析音源。个人歌单与会员音源尚未接入。',
   },
 ];

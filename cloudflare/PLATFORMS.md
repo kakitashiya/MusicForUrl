@@ -9,7 +9,7 @@
 | 网易云音乐 | `/api` | `x-token` | 扫码 / 验证码 / 密码 / Cookie | 支持 | 支持 |
 | QQ 音乐 | `/api/qq` | `x-qq-token` | 扫码 | 支持 | 支持 |
 | 酷狗音乐 | `/api/kugou` | `x-kugou-token` | 扫码（仅账号身份） | 支持 | 支持（受版权限制） |
-| 酷我音乐 | `/api/kuwo` | `x-kuwo-token` | 未实现 | 受上游风控影响 | 支持 |
+| 酷我音乐 | `/api/kuwo` | `x-kuwo-token` | 账号密码 / 手机短信（仅账号身份） | 受上游风控影响 | 支持 |
 
 > **兼容性红线**：`/api/...` 必须继续等于网易云、`/api/qq/...` 必须继续等于 QQ 音乐。线上 VRChat 房间与播放器里已经签发的 M3U8 链接就是这个形状，改前缀等于全部失效。`cloudflare/tests/platforms.test.js` 的第一条测试锁定了这一点。
 
@@ -17,15 +17,15 @@
 
 `account: true` 表示这个平台有登录入口：服务端保存加密 Cookie，并把账号身份挂到 `users` 行上。
 
-`library: true` 才表示有「我的音乐」——用户歌单、收藏、播放记录。两者不是同一件事：**酷狗可以扫码登录，但个人歌单与收藏尚未接入**（`account: true, library: false`）。
+`library: true` 才表示有「我的音乐」——用户歌单、收藏、播放记录。两者不是同一件事：**酷狗与酷我都可以登录，但个人歌单与收藏尚未接入**（`account: true, library: false`）。
 
 `guestPlayback: true` 表示**未登录也能解析与播放**；登录只是补充账号身份，不是播放的前置条件。
 
-只有游客能力（`account: false`，酷我）的平台：
+只有游客能力（`account: false`）的平台：
 
 - 不需要登录即可解析公开歌单并生成播放链接。
 - 没有 `users` 行，因此**没有个人歌单、收藏与播放记录**；`/api/<platform>/playlist/user`、`/favorites`、`/history/*` 一律返回 403 并附带原因；`/auth/*` 返回 501（`/auth/status` 除外，它返回 `{logged:false, supported:false}`）。
-- 播放链接是**无状态令牌**：载荷里 `u = 0`、`h = 'guest'`，只验 HMAC 不查库。这同时省掉了每个音频分片请求的一次 D1 读取。代价是没有「退出登录即撤销」——链接有效期内一直可用，与匿名分享链接等价。未登录的酷狗同样走这条路径。
+- 播放链接是**无状态令牌**：载荷里 `u = 0`、`h = 'guest'`，只验 HMAC 不查库。这同时省掉了每个音频分片请求的一次 D1 读取。代价是没有「退出登录即撤销」——链接有效期内一直可用，与匿名分享链接等价。未登录的酷狗 / 酷我同样走这条路径。
 - 播放记录不写 `play_stats`（没有 `users` 行，外键无法成立），但仍然写入 Analytics Engine，因此会计入「关于」页的匿名汇总。
 
 ### 酷狗的上游接口
@@ -48,6 +48,19 @@
 签名是 `md5(salt + 按 key 排序的 k=v 串 + body + salt)`，salt 为 `NVPh5oo715z5DIWAeQlhMDsWXXQV4hwt`；Workers 的 WebCrypto 不支持 MD5，因此仓库里带了一个纯 JS 实现（`src/upstream/md5.js`）。确认成功后只保存 `token` 与 `userid`，用户资料接口要求 RSA PKCS#1 v1.5，Worker 里没有实现。
 
 **登录不会提升音源**：移动端 `getSongInfo` 完全忽略登录态，要让会员/付费曲目可播得走 `/v5/url` 或 `/v6/priv_url`，而它们要求先做设备注册（AES-CBC + RSA PKCS#1 v1.5）。因此付费曲目仍然返回统一的版权/VIP 提示。
+
+### 酷我的登录
+
+酷我没有扫码接口，站点的登录弹窗只有账号密码、手机短信与第三方 OAuth（OAuth 回调 Cookie 落在 `.kuwo.cn`，服务端接不了）。实现见 `cloudflare/src/upstream/kuwo-login.js`：
+
+| 步骤 | 接口 | 说明 |
+| --- | --- | --- |
+| 图形验证码 | `GET https://www.kuwo.cn/api/common/captcha/getcode` | 返回 `{ img: PNG data URL, token }`，同时下发 `Hm_Iuvt_*` 匿名 Cookie，token 与它绑定 |
+| 账号密码 | `POST https://wapi.kuwo.cn/api/www/login/loginByKw` | body：`{ userIp, uname, password, verifyCode, verifyCodeToken }` |
+| 发送短信 | `POST https://www.kuwo.cn/api/sms/mobileLoginCode` | body：`{ verifyCode, verifyCodeToken, mobile, userIp }`，成功返回 `tm` |
+| 短信登录 | `POST https://wapi.kuwo.cn/api/www/login/loginByMobile` | body：`{ mobile, verifyCode, smsCode, tm }` |
+
+登录成功的响应直接在 JSON 里返回 `data.cookies`（`userid` / `uname3` / `pic3` / `sid` 等），服务端据此生成账号资料并加密存储；密码与图形验证码只用于这一次请求，不落库。图形验证码字母**区分大小写**。
 
 ### 酷我的上游接口
 

@@ -117,6 +117,34 @@ export const api = {
     ).then(result => result.data);
   },
 
+  // 酷我：账号密码 / 手机短信。图形验证码的 token 与 cookie 必须原样带回。
+  authCaptcha(platform: Platform) {
+    return request<{ data: { img: string; token: string; cookie: string } }>(
+      apiPath(platform, '/auth/captcha'), platform,
+    ).then(result => result.data);
+  },
+  loginByPassword(platform: Platform, payload: {
+    uname: string; password: string; verifyCode: string; verifyCodeToken: string; cookie: string;
+  }) {
+    return request<{ data: { token: string; user: AccountUser } }>(
+      apiPath(platform, '/auth/login/password'), platform, { method: 'POST', body: payload },
+    ).then(result => result.data);
+  },
+  sendLoginSms(platform: Platform, payload: {
+    mobile: string; verifyCode: string; verifyCodeToken: string; cookie: string;
+  }) {
+    return request<{ data: { tm: string } }>(
+      apiPath(platform, '/auth/sms/send'), platform, { method: 'POST', body: payload },
+    ).then(result => result.data);
+  },
+  loginBySms(platform: Platform, payload: {
+    mobile: string; verifyCode: string; smsCode: string; tm: string; cookie: string;
+  }) {
+    return request<{ data: { token: string; user: AccountUser } }>(
+      apiPath(platform, '/auth/login/sms'), platform, { method: 'POST', body: payload },
+    ).then(result => result.data);
+  },
+
   // 一次请求完成解析 → 取歌单 → 签发链接，替代连续的 /parse + /url
   generate(platform: Platform, url: string): Promise<GeneratedLink> {
     return request<{ data: GeneratedLink }>(

@@ -6,9 +6,12 @@
 //                这里先请求一次页面拿 Cookie 再调用接口；仍然被拒时给出可操作的提示。
 //                运维可以用 KUWO_COOKIE 变量直接贴一份浏览器 Cookie 绕过引导。
 //   音源解析 ✅  antiserver.kuwo.cn 的转换接口无需登录，支持 128/192/320 kbps 三档。
-//   账号接入 ❌  未实现，酷我没有公开的扫码登录流程。
+//   账号接入 ✅  账号密码 / 手机短信登录（kuwo-login.js）。没有扫码登录接口；
+//                登录只解决账号身份，音源仍按游客接口解析。
 //
 // 免费额度约束：读歌单最多 2 次子请求（引导 + 接口），解析音源 1 次。
+
+import { captcha, checkLoginStatus, loginByPassword, loginBySms, sendSms } from './kuwo-login.js';
 
 const WEB_ORIGIN = 'https://www.kuwo.cn';
 const ANTI_ORIGIN = 'http://antiserver.kuwo.cn';
@@ -164,4 +167,7 @@ async function getSongResource(songId, _cookie, env) {
   };
 }
 
-export { BLOCKED_MESSAGE, KuwoError, getPlaylistDetail, getSongResource };
+export {
+  BLOCKED_MESSAGE, KuwoError, captcha, checkLoginStatus, getPlaylistDetail, getSongResource,
+  loginByPassword, loginBySms, sendSms,
+};
