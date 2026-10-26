@@ -107,7 +107,7 @@ export function AccountMenu() {
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-label="账号"
-        className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-card pl-1.5 pr-2.5 text-[13px] transition-colors hover:bg-accent"
+        className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-border bg-card px-3 text-[13px] transition-colors hover:bg-accent"
       >
         {signedIn.length ? (
           <span className="flex shrink-0 items-center">
@@ -127,7 +127,7 @@ export function AccountMenu() {
             <UserRoundPlus className="size-3.5" />
           </span>
         )}
-        <span className="max-w-[8rem] truncate font-medium">
+        <span className="max-w-[8rem] truncate text-center font-medium">
           {primary ? (users[primary.id]?.nickname || '已登录') : '登录音乐账号'}
         </span>
         {signedIn.length > 1 && (
