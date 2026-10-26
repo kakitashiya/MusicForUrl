@@ -7,10 +7,6 @@
   "vars": {
     "AUDIO_CACHE_ENABLED": "false"
   },
-  "analytics_engine_datasets": [
-    { "binding": "ANALYTICS", "dataset": "mfu_playback" },
-    { "binding": "ANALYTICS_REQUESTS", "dataset": "mfu_requests" }
-  ],
   "triggers": {
     "crons": ["17 3 * * *"]
   },
