@@ -17,16 +17,6 @@
   "triggers": {
     "crons": ["17 3 * * *"]
   },
-  "routes": [
-    {
-      "pattern": "nyasakura.com",
-      "custom_domain": true
-    },
-    {
-      "pattern": "music.nyasakura.com/*",
-      "zone_name": "nyasakura.com"
-    }
-  ],
   "placement": {
     "mode": "smart"
   },
