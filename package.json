@@ -1,6 +1,6 @@
 {
   "name": "music-for-url",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "网易云歌单转VRChat播放链接",
   "main": "server.js",
   "engines": {
