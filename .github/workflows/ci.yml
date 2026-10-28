@@ -1,0 +1,112 @@
+name: Project checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: project-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node:
+    name: Node backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+
+  worker:
+    name: Cloudflare Worker
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloudflare
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: cloudflare/package-lock.json
+      - run: npm ci
+      - run: npm test
+
+  web:
+    name: React tests, typecheck and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  docs:
+    name: Documentation sync and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - run: npm ci
+      # Includes repository document sync and VitePress dead-link validation.
+      - run: npm run build
+
+  pages:
+    name: Pages React assets and Functions compile
+    runs-on: ubuntu-latest
+    env:
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            cloudflare/package-lock.json
+      - run: npm ci --prefix web
+      - run: npm ci --prefix cloudflare
+      # Compile only: no deploy, account credentials, or remote bindings required.
+      - run: npm run build:pages
+      - name: Verify Pages artifact layout
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { existsSync, readFileSync } from 'node:fs';
+          assert.ok(existsSync('web/dist/index.html'));
+          assert.ok(existsSync('.pages-build/index.js'));
+          assert.ok(existsSync('functions/[[path]].js'));
+          assert.equal(existsSync('web/dist/_worker.js'), false);
+          assert.deepEqual(JSON.parse(readFileSync('web/dist/_routes.json', 'utf8')), {
+            version: 1, include: ['/api/*'], exclude: [],
+          });
+          JS

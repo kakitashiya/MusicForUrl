@@ -316,3 +316,6 @@ core.*
 
 # Editor lock files
 .~lock.*
+
+# Local Pages Functions compilation (validation only)
+/.pages-build/

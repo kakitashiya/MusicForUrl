@@ -20,7 +20,7 @@
 
 若优选入口出现 403、证书错误或播放失败，可先把 `music` 记录改回 CNAME `2f1343c8-5c9f-40dd-9784-3a0c2afe34e1.cfargotunnel.com` 并开启代理；这是切换前的 Fnos Tunnel 记录。保留 `music.nyasakura.com/*` Worker Route 即可继续由 Worker 响应。回滚后检查 `/api/health`、登录状态、M3U8 和音频请求，再排查 SaaS/DNS。不要改动其他 Tunnel 记录。
 
-这个版本用 **Cloudflare Workers Static Assets + Worker API + D1** 运行 MusicForUrl。网页仍在仓库的 `public/`；登录、歌单解析、签名链接、收藏和播放记录由 Worker 处理，账号 Cookie 经 AES-GCM 加密后存入 D1。无需 VPS、Docker 或常驻 Node 进程。
+这个版本用 **Cloudflare Workers Static Assets + Worker API + D1** 运行 MusicForUrl。网页源码在仓库的 `web/`，构建后的 `web/dist` 通过 `ASSETS` 绑定发布；登录、歌单解析、签名链接、收藏和播放记录由 Worker 处理，账号 Cookie 经 AES-GCM 加密后存入 D1。无需 VPS、Docker 或常驻 Node 进程。
 
 Cloudflare 目前建议新项目使用 Workers Static Assets；若你习惯 Pages，可把它理解为同类的静态资源加边缘函数部署方式。[Cloudflare 官方说明](https://developers.cloudflare.com/workers/best-practices/workers-best-practices/#use-workers-static-assets-for-new-projects)
 
@@ -60,7 +60,20 @@ JSON 请求体按实际读取字节限制为 65,536 字节，不依赖 `Content-
 
 这样做的原因：旧实现每次播放执行 3 条语句，其中裁剪语句会扫描 1,000–2,000 行，一次 30 首歌的播放约消耗 **45,000 行读取**，对免费版每天 500 万行只够约 110 次播放。改为聚合后每次播放约 450 行读取、30 行写入。
 
-**升级顺序（重要）**：`npm run db:remote`（建表，幂等）→ `npm run db:backfill`（把旧 `play_logs` 聚合成 `play_stats`，**必须在部署新版 Worker 之前执行一次**）→ `npm run db:migrate:stats`（给 `play_stats` 加 `duration_ms` 并建 `site_stats`，**同样必须在部署前执行**，否则 `recordPlayback` 会因为缺列整条失败）→ `npm run db:migrate:qr`（重建 `qr_sessions`，去掉只允许 netease/qq 的 CHECK，**必须在酷狗扫码登录上线前执行**）→ `npm run deploy`。`play_logs` 暂时保留以便回填，观察一个版本后可删除。`schema.sql` 可重复执行，不清空账号、歌单或收藏；新库直接用它即可，不需要跑迁移。
+**已有数据库升级（先检查，不按编号盲跑）**：先备份并核对实际表结构与迁移历史。`schema.sql` 仅通过 `CREATE TABLE IF NOT EXISTS` 建缺失表，不会修改旧列或 CHECK；不能先跑新 schema 再无条件执行 `0002`（可能重复添加 `duration_ms`）。`0001` 仅用于旧 play_logs 需要回填的库；`0002` 仅用于缺少 duration_ms / site_stats 的对应旧版本；`0003` 仅用于 qr_sessions 仍有两平台 CHECK 的库。新库直接使用当前 schema，不需要这些迁移。Pages 切换 UI 不应顺便自动执行任何生产迁移或 `npm run deploy`。
+
+### 旧库 users 平台约束（发布前置检查）
+
+早期 `users.platform` 的 CHECK 只允许 `netease` / `qq`。现在 `schema.sql` 声明四平台，但 `CREATE TABLE IF NOT EXISTS` **不会修改既有表**。获授权后先只读检查实际定义，不读账号密文或令牌：
+
+```sql
+SELECT name, sql FROM sqlite_schema WHERE name IN ('users', 'qr_sessions', 'play_stats', 'site_stats');
+PRAGMA foreign_key_check;
+```
+
+若 users 已允许四平台，无需为此次 UI 接入改表。若仍只有两平台，酷狗/酷我登录会受旧约束阻碍：**当前仓库没有可直接执行的 users 升级迁移**，不要通过重建空库、删除账号、轮换密钥或关闭外键来解决。
+
+需要在独立批准、维护窗口、原数据库备份及隔离副本验证后准备迁移，保留用户 ID、Cookie 密文、令牌哈希、索引、自增序列高水位及 playlists / favorites / play_stats / play_logs 子行。D1 的 `defer_foreign_keys` 不会禁止 `ON DELETE CASCADE`，简单 DROP users 会删除关联数据。参考 [D1 外键](https://developers.cloudflare.com/d1/sql-api/foreign-keys/)和[文件导入](https://developers.cloudflare.com/d1/best-practices/import-export-data/)。未验证的迁移不得加入构建命令；回退前端也不等于回滚数据库。
 
 ### 站点统计
 
@@ -119,13 +132,14 @@ Cloudflare 版前端位于仓库根目录的 `web/`：**React + Vite + Tailwind 
 
 **回滚**：把 `wrangler.jsonc` 的 `assets.directory` 改回 `"../public"` 并重新部署即可回到旧前端；`public/` 目录保持冻结、未被修改。
 
-`public/` 与 `public/js/vendor/` 现在只服务冻结的 Node.js 版前端，同步脚本保留为 `npm run build:vendor`。
+`public/` 与 `public/js/vendor/` 服务冻结的 Node.js / Docker 前端（旧 Pages 部署可能仍在使用它），同步脚本保留为 `npm run build:vendor`。
 
 ## 本地验证
 
 建议使用 Node.js 24+（仓库测试使用 Node 24）。以下命令在 `cloudflare/` 目录运行：
 
 ```powershell
+npm --prefix ../web ci
 npm ci
 Copy-Item .dev.vars.example .dev.vars
 ```
@@ -138,18 +152,21 @@ npm run dev
 npm test
 ```
 
+`npm run dev` 的 `predev` 会先构建 `web/dist`，因此必须同时安装 `web/` 和 `cloudflare/` 的依赖。
+
 本地开发默认使用 Wrangler 的本地 D1 数据，不会修改远端数据库。生产密钥的本机备份为 Git 忽略的 `.dev.vars.production`；请将它备份到你自己的安全位置，避免丢失后无法解密已保存的账号 Cookie。
 
 ## 首次部署
 
 本站已完成首次部署。以下步骤适用于新的 Cloudflare 账号，命令均在 `cloudflare/` 目录执行：
 
-1. 安装锁定依赖：`npm ci`，并登录 Wrangler：`npx wrangler login`。
+1. 安装两套锁定依赖：`npm --prefix ../web ci` 和 `npm ci`，并登录 Wrangler：`npx wrangler login`。
 2. 创建 D1：`npx wrangler d1 create music-for-url`。把返回的 `database_id` 填进 `wrangler.jsonc`，保留 `DB` 绑定名。
 3. 删除 `wrangler.jsonc` 中本站的 `routes`，保留 `workers_dev: true`；如需自定义域名，使用自己账号下的域名配置。
-4. 初始化远端表：`npm run db:remote`。
-5. 从 `.dev.vars.example` 复制出 Git 忽略的 `.dev.vars.production`，将 `ENCRYPTION_KEY` 改为独立的至少 32 字符随机密钥，并安全备份。
-6. 执行 `npm run build:assets`，再用 `npx wrangler deploy --secrets-file .dev.vars.production` 同时发布 Worker 与密钥。这里直接调用 Wrangler，需要先手动构建静态依赖。以后代码更新使用 `npm run deploy` 即可自动构建并保留已有密钥。
+4. 处理可选 R2：启用缓存时，先按[私有 R2 缓存](#私有-r2-缓存)创建自己的私有桶并更新 `r2_buckets` 中的 `bucket_name`，保留 `AUDIO_CACHE` 绑定名；不用 R2 时，删除整个 `r2_buckets` 配置并将 `vars.AUDIO_CACHE_ENABLED` 设为 `"false"`。仅设为 `false` 仍会要求绑定的桶存在。
+5. 初始化远端表：`npm run db:remote`。
+6. 从 `.dev.vars.example` 复制出 Git 忽略的 `.dev.vars.production`，将 `ENCRYPTION_KEY` 改为独立的至少 32 字符随机密钥，并安全备份。
+7. 执行 `npm run build:assets`，再用 `npx wrangler deploy --secrets-file .dev.vars.production` 同时发布 Worker 与密钥。这里直接调用 Wrangler，不会触发 npm 的 `predeploy`，需要先手动构建静态资源。以后代码更新使用 `npm run deploy` 即可自动构建并保留已有密钥。
 
 可在 Cloudflare 的 Worker 设置中添加 `TOKEN_TTL_HOURS`、`PLAYBACK_TOKEN_TTL_SECONDS`、`CACHE_TTL`、`MUSIC_QUALITY` 等可选变量。密钥应设置为 **Secret**，不要写入 `wrangler.jsonc` 或 Git。
 
@@ -173,12 +190,12 @@ npx wrangler r2 bucket lifecycle add music-for-url-private-cache expire-cover --
 
 Node.js 版本共用播放器 API、音质策略与流代理，以 SQLite / 可选磁盘缓存运行，支持浏览器可解码的 FLAC，旧 FFmpeg 输出保留。两种环境的认证签名和加密数据不能直接互换。
 
-Pages Functions 入口在根目录 `functions/[[path]].js`，配置为 `wrangler.pages.jsonc`。必须设置 D1 / R2 和 Secret，定时清理另配维护 Worker；推荐 Workers Static Assets。步骤见[部署指南](../website/guide/deployment.md)。
+Pages Functions 入口在仓库根目录 `functions/[[path]].js`，复用本 Worker API，现有 Pages 项目可发布 React 的 `web/dist`。从仓库根目录安装 `cloudflare/` 与 `web/` 的依赖，再执行 `npm run build:pages`，同时验证 React 与 Functions 构建。保持根目录的 `functions/`、原 D1 绑定与 Secret，不新建数据库、不轮换密钥。`wrangler.pages.jsonc` 仅为显式 CLI 配置示例，不可带占位 ID 覆盖生产设置。控制台设置、旧库检查与回退见[Pages 升级指南](../website/guide/deployment.md#现有-pages-项目接入-react)。Pages 定时清理仍须单独维护。
 
 官网仅在 [GitHub Pages](https://znc15.github.io/MusicForUrl/) 发布，构建前自动同步仓库四份文档，`.github/workflows/website.yml` 自动构建和发布。
 
 ## 迁移说明
 
-旧版 Express/SQLite 数据不会自动导入 D1，需要重新登录，收藏和历史从新数据库开始。`server.js`、`routes/` 与 `deploy/` 继续支持自有服务器。Cloudflare 使用 `cloudflare/src/`、`cloudflare/schema.sql`、共享 `lib/player-*.js` 策略 / API / 代理、`lib/qqmusic.js` 与 `public/`。
+旧版 Express/SQLite 数据不会自动导入 D1，需要重新登录，收藏和历史从新数据库开始。`server.js`、`routes/` 与 `deploy/` 继续支持自有服务器。Cloudflare 使用 `cloudflare/src/`、`cloudflare/schema.sql`、共享 `lib/player-*.js` 策略 / API / 代理、`lib/qqmusic.js` 与 React 前端 `web/`；`public/` 仅用于旧版界面。
 
 网易云、QQ 音乐、酷狗与酷我的接口并非 Cloudflare 平台服务，可能随上游接口或风控变化而失效。部署后应分别用真实账号验证扫码、歌单解析、音频地址和播放器行为；酷狗扫码登录的签名算法也随 Web 前端发版变化，失效时先看 `kugou-login.js`。

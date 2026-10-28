@@ -14,7 +14,7 @@ Cloudflare 版前端是 **React + Vite**，动画由 **`motion`（framer-motion�
 
 | 位置 | 触发条件 | 实现 |
 | --- | --- | --- |
-| `web/src/motion/primitives.tsx` → `PageTransition` | 五个视图互相切换、浏览器前进/后退 | `AnimatePresence mode="wait"`，先退出旧页面再进入新页面；`App.tsx` 按路由分包，切换时由 `Suspense` 兜底 |
+| `web/src/motion/primitives.tsx` → `PageTransition` | 五个视图互相切换、浏览器前进/后退 | 按路由 key 重新挂载，进入动画由 `web/src/index.css` 的 `page-enter` 关键帧提供；只做进入不做退出。`App.tsx` 按路由分包，切换时由 `Suspense` 兜底 |
 | `web/src/components/sidebar.tsx` → 导航项 | 切换工作台页面 | 用 `NavLink` 的激活态直接切换背景色，不再需要测量位置的滑块 |
 | `web/src/components/sidebar.tsx` → 展开/收起 | 点击底部账号头像旁的开关 | 纯 CSS `width` 过渡（250ms `cubic-bezier(0.4,0,0.2,1)`），宽度由 `--rail-width` 驱动；文字标签不参与动画，直接按状态挂载/卸载，避免收起过程中出现半截文字 |
 | `web/src/components/volume-control.tsx`（只在播放条） | 点击或拖动轨道、方向键、静音 | 填充宽度与滑块位置随音量即时更新，不做补间——音量是连续量，动画只会让手感发黏；滑块圆点在 hover / 聚焦 / 拖动时淡入 |
@@ -28,11 +28,11 @@ Cloudflare 版前端是 **React + Vite**，动画由 **`motion`（framer-motion�
 
 ## 实装参数
 
-所有时长均以秒配置在 `DURATION`。文本不做模糊、旋转或大幅缩放。
+除页面进入外，所有时长均以秒配置在 `DURATION`。页面进入是 CSS 关键帧，280ms 与缓动写在 `web/src/index.css` 的 `.page-enter`。文本不做模糊、旋转或大幅缩放。
 
 | 动画 | 进入 | 退出 | 延迟/错峰 | 位移/缩放 | 缓动 |
 | --- | --- | --- | --- | --- | --- |
-| 页面 | 280ms | 120ms | — | 进入 y=12px，退出 y=-6px | `[0.22, 0.61, 0.36, 1]` |
+| 页面 | 280ms | — | — | 进入 y=12px，无退出动画 | `[0.22, 0.61, 0.36, 1]` |
 | 列表 | 220ms | 100ms | 每行间隔 25ms | 进入 y=8px | 同上 |
 | 分段滑块 | 260ms | — | — | `layoutId` 自动匹配位置与尺寸 | `[0.4, 0, 0.2, 1]` |
 | 侧栏宽度 | 250ms | 250ms | — | 76px ↔ 252px | `[0.4, 0, 0.2, 1]` |
@@ -63,7 +63,7 @@ import { Segmented, ListReveal, ListItem } from '@/motion/primitives';
 
 - `<MotionConfig reducedMotion="user">` 跟随系统的减少动态效果设置；`web/src/index.css` 另外尊重旧前端写入的 `documentElement.dataset.motion` 标志，并保留 `prefers-reduced-motion` 兜底。
 - Radix 组件自带焦点陷阱、Escape 关闭、背景 `inert` 与 ARIA 角色，旧版手写的键盘循环不再需要。
-- 页面切换时旧视图通过 `AnimatePresence` 退出，`Suspense` 在分包加载期间显示骨架，不会出现空白或半透明残留。
+- 页面切换时旧视图立即卸载，新视图靠 CSS 关键帧进入，不依赖 JS 逐帧推进：rAF 被节流（后台标签页、窗口遮挡）或系统要求减少动态效果时，页面不会停在 opacity 0 或半透明状态。`Suspense` 在分包加载期间显示骨架。
 - 列表使用 `staleTime: 30s` 的查询缓存，翻页与切 Tab 不会重复请求，因此列表动画不会与网络抖动耦合。
 - 播放控件不参与位移或缩放动画，避免误触与可点击区域漂移。
 

@@ -1,10 +1,10 @@
 import * as React from 'react';
-import { AnimatePresence, m } from 'motion/react';
+import { m } from 'motion/react';
 import { cn } from '@/lib/utils';
 
 // 时长表与旧版 cloudflare/ANIMATION.md 保持一致，方便对照
 export const DURATION = {
-  page: { enter: 0.28, exit: 0.12 },
+  page: { enter: 0.28 },
   tabs: { enter: 0.24, exit: 0.12 },
   list: { enter: 0.22, exit: 0.1 },
   indicator: 0.26,
@@ -14,19 +14,19 @@ export const DURATION = {
 
 const EASE = [0.22, 0.61, 0.36, 1] as const;
 
+/**
+ * 页面切换只做「进入」：路由变化时旧视图立刻卸载，新视图带 page-enter 动画挂载。
+ *
+ * 这里刻意不用 motion 的 AnimatePresence。它的出/进场是 JS 逐帧推进的，
+ * 一旦 rAF 被节流（后台标签页、窗口被遮挡、系统「减少动态效果」）就可能停在
+ * opacity 0 的初始帧或退场帧，页面变成空白。CSS 关键帧按时间轴推进且最终帧
+ * 恒定可见，index.css 里的 prefers-reduced-motion 规则会让它瞬间结束。
+ */
 export function PageTransition({ viewKey, children }: { viewKey: string; children: React.ReactNode }) {
   return (
-    <AnimatePresence mode="wait" initial={false}>
-      <m.div
-        key={viewKey}
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: -6 }}
-        transition={{ duration: DURATION.page.enter, ease: EASE }}
-      >
-        {children}
-      </m.div>
-    </AnimatePresence>
+    <div key={viewKey} className="page-enter">
+      {children}
+    </div>
   );
 }
 
@@ -125,4 +125,4 @@ export function Segmented<T extends string>({
   );
 }
 
-export { AnimatePresence, m };
+export { m };
