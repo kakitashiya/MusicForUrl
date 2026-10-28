@@ -4,7 +4,7 @@
 [![Node](https://img.shields.io/badge/node-%E2%89%A524-3c873a)](https://nodejs.org/)
 [![Cloudflare Workers](https://img.shields.io/badge/cloudflare-workers%20%2B%20d1-f38020)](https://developers.cloudflare.com/workers/)
 
-把网易云音乐、QQ 音乐、酷狗与酷我的歌单转换成轻量音频 M3U8 直链，自带账号管理、收藏、播放记录和站内播放器。前端 React + Vite，后端可运行在 **Cloudflare Workers + D1**（可选私有 R2）或 **自有 Node.js / Docker + SQLite**，两种部署共用播放器、音质策略与媒体代理。
+把网易云音乐、QQ 音乐、酷狗与酷我的歌单转换成轻量音频 M3U8 直链，自带账号管理、收藏、播放记录和站内播放器。Cloudflare 主线采用 React + Vite 前端与 **Workers + D1**（可选私有 R2）；**自有 Node.js / Docker + SQLite** 继续提供冻结的旧前端。两种部署共用播放器、音质策略与媒体代理。
 
 - 在线使用：<https://music.nyasakura.com/>
 - 文档站：<https://znc15.github.io/MusicForUrl/>
@@ -61,16 +61,21 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 Cloudflare 版由同一个 Worker 发布静态资源与 API，不能用纯静态 Pages 上传：
 
 ```powershell
-cd cloudflare
+cd cloudflare                          # 从仓库根目录进入
+npm --prefix ../web ci
+npm ci
 npx wrangler login
 npx wrangler d1 create music-for-url   # 把 database_id 写入 wrangler.jsonc
+# 先处理 routes 和可选 R2 绑定，见下文
 npm run db:remote
 Copy-Item .dev.vars.example .dev.vars.production
+# 将 ENCRYPTION_KEY 改为独立的至少 32 字符随机密钥并安全备份
+npm run build:assets                    # 直接调用 Wrangler 不会触发 predeploy
 npx wrangler deploy --secrets-file .dev.vars.production
 npm run deploy                          # 后续更新
 ```
 
-首次部署前务必删除或替换 `wrangler.jsonc` 中属于在线站点的 `routes`。升级顺序、环境变量与自定义域名见[部署文档](cloudflare/README.md)，自有服务器与 Docker 见 [README.node-docker.md](README.node-docker.md)。
+首次部署前务必删除或替换 `wrangler.jsonc` 中属于在线站点的 `routes`。默认配置包含 R2：不需要缓存时，删除整个 `r2_buckets` 配置并将 `vars.AUDIO_CACHE_ENABLED` 设为 `"false"`；需要时先创建自己的私有桶并更新桶名（保留 `AUDIO_CACHE` 绑定名），见[私有 R2 缓存](cloudflare/README.md#私有-r2-缓存)。仅设置 `false` 不会移除部署时的桶绑定要求。升级顺序、环境变量与自定义域名见[部署文档](cloudflare/README.md)，自有服务器与 Docker 见 [README.node-docker.md](README.node-docker.md)。
 
 ## 文档
 
@@ -88,7 +93,7 @@ npm run deploy                          # 后续更新
 ```text
 web/          Cloudflare 版前端（React + Vite + Tailwind + shadcn/ui）
 cloudflare/   Worker API、平台适配、D1 结构与回归测试
-public/       冻结的旧前端，仅随 Node.js / Docker 部署提供
+public/       冻结的旧前端，用于 Node.js / Docker 与旧版 Pages Functions
 lib/          播放器策略与 QQ 音乐适配（两个运行时共用）
 server.js     Node.js 服务端入口（routes/、deploy/）
 website/      VitePress 文档站
