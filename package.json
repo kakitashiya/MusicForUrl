@@ -10,7 +10,9 @@
     "start": "node server.js",
     "dev": "node --watch-path=./lib --watch-path=./routes --watch-path=./server.js server.js",
     "check": "node --check server.js && node --check lib/auth.js && node --check lib/crypto.js && node --check lib/db.js && node --check lib/env-check.js && node --check lib/history.js && node --check lib/lite-video-bg.js && node --check lib/netease.js && node --check lib/playback-token.js && node --check routes/auth.js && node --check routes/favorite.js && node --check routes/history.js && node --check routes/hls.js && node --check routes/img.js && node --check routes/playlist.js && node --check routes/song.js && echo Syntax check passed",
-    "test": "node scripts/test.cjs"
+    "test": "node scripts/test.cjs",
+    "check:pages": "node cloudflare/node_modules/wrangler/bin/wrangler.js pages functions build functions --outdir .pages-build --build-output-directory web/dist --compatibility-date=2026-10-03",
+    "build:pages": "npm --prefix web run build && npm run check:pages"
   },
   "keywords": [
     "netease",

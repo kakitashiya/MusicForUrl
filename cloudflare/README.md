@@ -60,7 +60,20 @@ JSON 请求体按实际读取字节限制为 65,536 字节，不依赖 `Content-
 
 这样做的原因：旧实现每次播放执行 3 条语句，其中裁剪语句会扫描 1,000–2,000 行，一次 30 首歌的播放约消耗 **45,000 行读取**，对免费版每天 500 万行只够约 110 次播放。改为聚合后每次播放约 450 行读取、30 行写入。
 
-**升级顺序（重要）**：`npm run db:remote`（建表，幂等）→ `npm run db:backfill`（把旧 `play_logs` 聚合成 `play_stats`，**必须在部署新版 Worker 之前执行一次**）→ `npm run db:migrate:stats`（给 `play_stats` 加 `duration_ms` 并建 `site_stats`，**同样必须在部署前执行**，否则 `recordPlayback` 会因为缺列整条失败）→ `npm run db:migrate:qr`（重建 `qr_sessions`，去掉只允许 netease/qq 的 CHECK，**必须在酷狗扫码登录上线前执行**）→ `npm run deploy`。`play_logs` 暂时保留以便回填，观察一个版本后可删除。`schema.sql` 可重复执行，不清空账号、歌单或收藏；新库直接用它即可，不需要跑迁移。
+**已有数据库升级（先检查，不按编号盲跑）**：先备份并核对实际表结构与迁移历史。`schema.sql` 仅通过 `CREATE TABLE IF NOT EXISTS` 建缺失表，不会修改旧列或 CHECK；不能先跑新 schema 再无条件执行 `0002`（可能重复添加 `duration_ms`）。`0001` 仅用于旧 play_logs 需要回填的库；`0002` 仅用于缺少 duration_ms / site_stats 的对应旧版本；`0003` 仅用于 qr_sessions 仍有两平台 CHECK 的库。新库直接使用当前 schema，不需要这些迁移。Pages 切换 UI 不应顺便自动执行任何生产迁移或 `npm run deploy`。
+
+### 旧库 users 平台约束（发布前置检查）
+
+早期 `users.platform` 的 CHECK 只允许 `netease` / `qq`。现在 `schema.sql` 声明四平台，但 `CREATE TABLE IF NOT EXISTS` **不会修改既有表**。获授权后先只读检查实际定义，不读账号密文或令牌：
+
+```sql
+SELECT name, sql FROM sqlite_schema WHERE name IN ('users', 'qr_sessions', 'play_stats', 'site_stats');
+PRAGMA foreign_key_check;
+```
+
+若 users 已允许四平台，无需为此次 UI 接入改表。若仍只有两平台，酷狗/酷我登录会受旧约束阻碍：**当前仓库没有可直接执行的 users 升级迁移**，不要通过重建空库、删除账号、轮换密钥或关闭外键来解决。
+
+需要在独立批准、维护窗口、原数据库备份及隔离副本验证后准备迁移，保留用户 ID、Cookie 密文、令牌哈希、索引、自增序列高水位及 playlists / favorites / play_stats / play_logs 子行。D1 的 `defer_foreign_keys` 不会禁止 `ON DELETE CASCADE`，简单 DROP users 会删除关联数据。参考 [D1 外键](https://developers.cloudflare.com/d1/sql-api/foreign-keys/)和[文件导入](https://developers.cloudflare.com/d1/best-practices/import-export-data/)。未验证的迁移不得加入构建命令；回退前端也不等于回滚数据库。
 
 ### 站点统计
 
@@ -119,7 +132,7 @@ Cloudflare 版前端位于仓库根目录的 `web/`：**React + Vite + Tailwind 
 
 **回滚**：把 `wrangler.jsonc` 的 `assets.directory` 改回 `"../public"` 并重新部署即可回到旧前端；`public/` 目录保持冻结、未被修改。
 
-`public/` 与 `public/js/vendor/` 服务冻结的 Node.js / Docker 与旧版 Pages Functions 前端，同步脚本保留为 `npm run build:vendor`。
+`public/` 与 `public/js/vendor/` 服务冻结的 Node.js / Docker 前端（旧 Pages 部署可能仍在使用它），同步脚本保留为 `npm run build:vendor`。
 
 ## 本地验证
 
@@ -177,7 +190,7 @@ npx wrangler r2 bucket lifecycle add music-for-url-private-cache expire-cover --
 
 Node.js 版本共用播放器 API、音质策略与流代理，以 SQLite / 可选磁盘缓存运行，支持浏览器可解码的 FLAC，旧 FFmpeg 输出保留。两种环境的认证签名和加密数据不能直接互换。
 
-旧版 Pages Functions 入口在根目录 `functions/[[path]].js`，配置为 `wrangler.pages.jsonc`，发布的是冻结的 `public/`，不是 React 的 `web/dist`。必须设置自己的 D1 与 Secret；R2 可选，不使用时需删除绑定。定时清理另配维护 Worker；新部署推荐 Workers Static Assets。步骤见[部署指南](../website/guide/deployment.md)。
+Pages Functions 入口在仓库根目录 `functions/[[path]].js`，复用本 Worker API，现有 Pages 项目可发布 React 的 `web/dist`。从仓库根目录安装 `cloudflare/` 与 `web/` 的依赖，再执行 `npm run build:pages`，同时验证 React 与 Functions 构建。保持根目录的 `functions/`、原 D1 绑定与 Secret，不新建数据库、不轮换密钥。`wrangler.pages.jsonc` 仅为显式 CLI 配置示例，不可带占位 ID 覆盖生产设置。控制台设置、旧库检查与回退见[Pages 升级指南](../website/guide/deployment.md#现有-pages-项目接入-react)。Pages 定时清理仍须单独维护。
 
 官网仅在 [GitHub Pages](https://znc15.github.io/MusicForUrl/) 发布，构建前自动同步仓库四份文档，`.github/workflows/website.yml` 自动构建和发布。
 

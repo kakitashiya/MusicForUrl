@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | Workers Static Assets | `web/` 构建为 `web/dist`，Worker 同时处理 API | React 主线，推荐 |
 | Node.js / Docker | `server.js` 提供 `public/` | 冻结的旧前端 |
-| Cloudflare Pages Functions | `wrangler.pages.jsonc` 发布 `public/` + 根目录 `functions/` | 旧版兼容路径，不是 React 部署 |
+| Cloudflare Pages Functions | `web/dist` + 仓库根目录 `functions/` | React 前端，现有 Pages 项目无需迁移平台 |
 | GitHub Pages | `website/.vitepress/dist` | 仅项目文档站，不运行音乐 API |
 
 ## 后端兼容范围
@@ -56,18 +56,43 @@ npm run build:assets
 npx wrangler deploy --secrets-file .dev.vars.production
 ```
 
-直接调用 Wrangler 不会触发 npm 的 `predeploy`，因此首次发布必须显式构建 `web/dist`。之后使用 `npm run deploy` 会自动构建并保留已有 Secret。完整说明见 [Cloudflare 仓库文档](../generated/cloudflare)。已有数据库升级先备份 D1，再按该文档的迁移顺序执行，不能把新库初始化替代旧库迁移；已有密钥不应随更新轮换。
+直接调用 Wrangler 不会触发 npm 的 `predeploy`，因此首次发布必须显式构建 `web/dist`。之后使用 `npm run deploy` 会自动构建并保留已有 Secret。完整说明见 [Cloudflare 仓库文档](../generated/cloudflare)。已有数据库升级先备份 D1，再按实际结构选择该文档中所需的迁移，不能把新库初始化替代旧库迁移；已有密钥不应随更新轮换。
 
-## 旧版 Pages Functions
+## 现有 Pages 项目接入 React
 
-根目录 `functions/[[path]].js` 复用 Worker 处理器，`cloudflare/wrangler.pages.jsonc` 是旧前端示例，输出目录明确为 `public/`。此路径不使用 `web/dist`，无需安装或构建 `web/`。创建并初始化自己的 D1、修改配置中的 D1 ID；R2 可选，不使用时删除 `r2_buckets` 并保持 `AUDIO_CACHE_ENABLED=false`，使用时先创建私有桶、更新桶名并启用缓存。在 Pages 项目设置独立的 `ENCRYPTION_KEY` Secret。从仓库根目录执行：
+保留现有 Pages 项目、域名、D1 数据库与 `ENCRYPTION_KEY`，不用新建资源或迁到 Workers。根目录 `functions/[[path]].js` 复用 `cloudflare/src/index.js`，负责同源 `/api/*`；React 前端发布 `web/dist`，不是旧版 `public/`，也不是文档站 `website/.vitepress/dist`。
 
-```sh
-npm --prefix cloudflare ci
-npx --prefix cloudflare wrangler pages deploy public --config cloudflare/wrangler.pages.jsonc
-```
+### Git 构建设置
 
-Pages Functions 需要 D1 绑定与 Secret，启用缓存时还需 R2，不能仅上传静态 HTML。本项目每日清理使用 Worker `scheduled`，Pages 部署须另配维护 Worker 的 Cron 执行 schema 中过期表清理，或使用推荐的 Workers 部署。参考 [Pages Functions 绑定](https://developers.cloudflare.com/pages/functions/bindings/)与 [Workers Cron](https://developers.cloudflare.com/workers/configuration/cron-triggers/)。
+| 设置 | 值 |
+| --- | --- |
+| 生产分支 | `master`（发布前核对目标提交） |
+| 根目录 | 仓库根目录，留空或 `/`；**不要设为 `web` 或 `cloudflare`** |
+| 构建命令 | `npm --prefix cloudflare ci && npm --prefix web ci && npm run build:pages` |
+| 构建输出目录 | `web/dist` |
+| 构建变量 | `NODE_VERSION=24.22.1`、`SKIP_DEPENDENCY_INSTALL=1` |
+
+`build:pages` 先做 React 类型检查/构建，再编译根 `functions/`，验证服务端依赖可解析；校验产物放入忽略的 `.pages-build/`，不会把 `_worker.js` 混入 `web/dist` 或切换成 Advanced mode。Pages 发布时仍自动编译根 `functions/`。只上传 `web/dist` 静态文件、遗漏 `functions/`，会导致页面可见但 API 不可用。
+
+`web/public/_routes.json` 随 Vite 复制到输出，仅让 `/api/*` 调用 Functions，静态资源和 `/user`、`/accounts` 等 SPA 路由交给 Pages。产物不提供顶层 `404.html`，使用 Pages 默认 SPA 回退。不要把 API 重写到 `index.html`。
+
+参考 [Functions 项目根目录要求](https://developers.cloudflare.com/pages/functions/get-started/)、[Pages SPA 路由](https://developers.cloudflare.com/pages/configuration/serving-pages/)和[构建变量](https://developers.cloudflare.com/pages/configuration/build-image/)。
+
+### 配置与数据检查（发布前）
+
+- 确认 Pages 的 `DB` 仍绑定原数据库，保留原 `ENCRYPTION_KEY` Secret，不重新生成或提交密钥。
+- `AUDIO_CACHE` / `AUDIO_CACHE_ENABLED` 沿用原有设置；R2 不使用时不需要新建桶。不要为切换 UI 改其他绑定或权限。
+- `cloudflare/wrangler.pages.jsonc` 是**显式 CLI 示例**，不是可直接覆盖生产的配置：项目名和 D1 ID 需要核实，不能保留占位 ID 部署。Git 根目录不存在默认 Wrangler 配置时，使用 Dashboard 的既有绑定。不要假定嵌套的自定义文件会自动接管控制台设置。
+- 若选择显式 `--config cloudflare/wrangler.pages.jsonc` 的 CLI 发布，必须先核对其项目名、DB、可选 R2 与现有项目一致；输出相对该配置为 `../web/dist`。本指南不建议为了切 UI 顺便切换配置管理来源。
+- 先只读确认实际表结构：`users.platform` 必须允许四平台、`qr_sessions` 允许酷狗、`play_stats` 有 `duration_ms`、存在 `site_stats`。旧库不能靠重跑 `CREATE TABLE IF NOT EXISTS` 放宽 CHECK。仅对确认缺失项安排备份与相应迁移，**不要盲跑全部迁移**；新库/已升级库不需要重复迁移。
+
+Pages 不会自动执行 Worker 的 `scheduled`。既有维护任务应保留；若尚无清理任务，另行规划维护 Worker，不应为本次前端接入自动创建资源。也不要运行 `npm --prefix cloudflare run deploy`，那会部署独立 Worker，而不是现有 Pages。
+
+### 发布验收与回退
+
+先在使用独立测试绑定的预览环境验证；没有隔离绑定时，不用真实登录/写入来测试生产库。检查：首页 HTML 引用 `/assets/*.js` 模块而非 `/js/main.js`；首页和 `/accounts` 有四平台；`/user` 仍只显示支持个人音乐库的网易云与 QQ（酷狗/酷我暂不支持个人歌单库）；直接刷新 `/user`、`/accounts` 正常；`/api/health` 与 `/api/player/capabilities` 返回 JSON 而非 HTML。再在获授权后验证登录、生成、播放和退出。
+
+发布失败可回退到原 Pages 部署，不切换数据库或密钥。数据库迁移须单独备份和审核，不能把回退旧前端当作数据库回滚。相关数据库步骤见 [Cloudflare 文档](../generated/cloudflare)。
 
 ## 自有服务器
 

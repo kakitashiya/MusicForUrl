@@ -4,7 +4,7 @@
 [![Node](https://img.shields.io/badge/node-%E2%89%A524-3c873a)](https://nodejs.org/)
 [![Cloudflare Workers](https://img.shields.io/badge/cloudflare-workers%20%2B%20d1-f38020)](https://developers.cloudflare.com/workers/)
 
-把网易云音乐、QQ 音乐、酷狗与酷我的歌单转换成轻量音频 M3U8 直链，自带账号管理、收藏、播放记录和站内播放器。Cloudflare 主线采用 React + Vite 前端与 **Workers + D1**（可选私有 R2）；**自有 Node.js / Docker + SQLite** 继续提供冻结的旧前端。两种部署共用播放器、音质策略与媒体代理。
+把网易云音乐、QQ 音乐、酷狗与酷我的歌单转换成轻量音频 M3U8 直链，自带账号管理、收藏、播放记录和站内播放器。Cloudflare 主线采用 React + Vite 前端与 **Workers / Pages Functions + D1**（可选私有 R2）；**自有 Node.js / Docker + SQLite** 继续提供冻结的旧前端。两种部署共用播放器、音质策略与媒体代理。
 
 - 在线使用：<https://music.nyasakura.com/>
 - 文档站：<https://znc15.github.io/MusicForUrl/>
@@ -77,6 +77,8 @@ npm run deploy                          # 后续更新
 
 首次部署前务必删除或替换 `wrangler.jsonc` 中属于在线站点的 `routes`。默认配置包含 R2：不需要缓存时，删除整个 `r2_buckets` 配置并将 `vars.AUDIO_CACHE_ENABLED` 设为 `"false"`；需要时先创建自己的私有桶并更新桶名（保留 `AUDIO_CACHE` 绑定名），见[私有 R2 缓存](cloudflare/README.md#私有-r2-缓存)。仅设置 `false` 不会移除部署时的桶绑定要求。升级顺序、环境变量与自定义域名见[部署文档](cloudflare/README.md)，自有服务器与 Docker 见 [README.node-docker.md](README.node-docker.md)。
 
+现有 **Cloudflare Pages** 项目接入新 UI：保持仓库根目录，构建命令 `npm --prefix cloudflare ci && npm --prefix web ci && npm run build:pages`，输出 `web/dist`，并保留根 `functions/` 与原 D1 / Secret。不要只上传静态目录或换密钥；先按[Pages 升级检查表](website/guide/deployment.md#现有-pages-项目接入-react)确认旧库结构。
+
 ## 文档
 
 | 文档 | 内容 |
@@ -93,7 +95,7 @@ npm run deploy                          # 后续更新
 ```text
 web/          Cloudflare 版前端（React + Vite + Tailwind + shadcn/ui）
 cloudflare/   Worker API、平台适配、D1 结构与回归测试
-public/       冻结的旧前端，用于 Node.js / Docker 与旧版 Pages Functions
+public/       冻结的旧前端，用于 Node.js / Docker；旧 Pages 可切换到 web/dist
 lib/          播放器策略与 QQ 音乐适配（两个运行时共用）
 server.js     Node.js 服务端入口（routes/、deploy/）
 website/      VitePress 文档站
