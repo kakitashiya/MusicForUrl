@@ -1,6 +1,6 @@
 # MusicForUrl
 
-[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue)](https://github.com/znc15/MusicForUrl/blob/master/LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A524-3c873a)](https://nodejs.org/)
 [![Cloudflare Workers](https://img.shields.io/badge/cloudflare-workers%20%2B%20d1-f38020)](https://developers.cloudflare.com/workers/)
 
