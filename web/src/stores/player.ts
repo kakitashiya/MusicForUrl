@@ -66,11 +66,12 @@ export const usePlayer = create<PlayerState>((set, get) => {
         songId: track.id,
         quality,
         fresh: options.fresh,
+        signal: controller.signal,
       });
-      if (get().generation !== generation) return;
+      if (controller.signal.aborted || inFlight !== controller || get().generation !== generation) return;
       set({ source, status: 'loading', message: source.warnings.join(' ') });
     } catch (error) {
-      if (get().generation !== generation) return;
+      if (controller.signal.aborted || inFlight !== controller || get().generation !== generation) return;
       const errorCode = error instanceof ApiError ? error.code : '';
       set({
         status: 'error',
@@ -103,9 +104,15 @@ export const usePlayer = create<PlayerState>((set, get) => {
     async open(platform, playlistId, grant = '') {
       clearSkipTimer();
       inFlight?.abort();
-      set({ status: 'loading', message: '', errorCode: '', source: null, playlist: null });
+      const controller = new AbortController();
+      inFlight = controller;
+      // Invalidate old playlist and source results as soon as navigation starts,
+      // not only after the new playlist has finished loading.
+      const generation = get().generation + 1;
+      set({ status: 'loading', message: '', errorCode: '', source: null, playlist: null, generation });
       try {
-        const playlist = await api.playerPlaylist(platform, playlistId, grant);
+        const playlist = await api.playerPlaylist(platform, playlistId, grant, controller.signal);
+        if (controller.signal.aborted || inFlight !== controller || get().generation !== generation) return;
         if (!playlist.tracks.length) {
           set({ status: 'error', message: '这个歌单里没有可播放的歌曲', errorCode: 'empty' });
           return;
@@ -113,6 +120,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
         set({ playlist });
         await load(0, { autoplay: true });
       } catch (error) {
+        if (controller.signal.aborted || inFlight !== controller || get().generation !== generation) return;
         set({
           status: 'error',
           message: error instanceof Error ? error.message : '歌单加载失败',
@@ -127,7 +135,10 @@ export const usePlayer = create<PlayerState>((set, get) => {
       const { playlist, index } = get();
       if (!playlist) return;
       if (index + 1 >= playlist.tracks.length) {
-        set({ status: 'ended', message: '歌单播放结束', errorCode: '' });
+        clearSkipTimer();
+        inFlight?.abort();
+        inFlight = null;
+        set({ status: 'ended', message: '歌单播放结束', errorCode: '', generation: get().generation + 1 });
         return;
       }
       await load(index + 1, { autoplay: true });

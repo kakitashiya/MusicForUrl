@@ -160,7 +160,7 @@ if (process.env.SITE_PASSWORD) {
     if (req.path.startsWith('/api/song/')) {
       return next();
     }
-    if (/^\/api\/player\/(media|cover)\//.test(req.path)) return true;
+    if (/^\/api\/player\/(media|cover)\//.test(req.path)) return next();
     if (req.path.startsWith('/api/hls/') && !req.path.startsWith('/api/hls/cache')) {
       return next();
     }

@@ -190,19 +190,19 @@ export const api = {
   stats(): Promise<SiteStats> {
     return request<{ data: SiteStats }>('/api/stats', 'netease').then(result => result.data);
   },
-  playerPlaylist(platform: Platform, playlistId: string, grant = ''): Promise<PlayerPlaylist> {
+  playerPlaylist(platform: Platform, playlistId: string, grant = '', signal?: AbortSignal): Promise<PlayerPlaylist> {
     return request<{ data: PlayerPlaylist }>(
-      `/api/player/playlist${query({ platform, id: playlistId, grant })}`, platform, { token: grant || undefined },
+      `/api/player/playlist${query({ platform, id: playlistId, grant })}`, platform, { token: grant || undefined, signal },
     ).then(result => result.data);
   },
   resolve(platform: Platform, options: {
-    playlistId: string; grant?: string; songId: string; quality: QualityId; fresh?: boolean;
+    playlistId: string; grant?: string; songId: string; quality: QualityId; fresh?: boolean; signal?: AbortSignal;
   }): Promise<ResolvedSource> {
-    const { playlistId, grant = '', songId, quality, fresh } = options;
+    const { playlistId, grant = '', songId, quality, fresh, signal } = options;
     return request<{ data: ResolvedSource }>(
       `/api/player/resolve/${songId}${query({ platform, id: playlistId, grant, quality, fresh: fresh ? 1 : undefined })}`,
       platform,
-      { token: grant || undefined },
+      { token: grant || undefined, signal },
     ).then(result => result.data);
   },
 };

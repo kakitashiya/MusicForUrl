@@ -13,7 +13,7 @@ import type { AccountUser, Platform } from '../lib/types';
  * 唯一对应 (platform, platform_user_id)，所以换账号就等于换一份数据，不存在串号。
  *
  * 浏览器这边只需要记住「每个平台当前生效的是哪个账号的令牌」：
- *   - 生效令牌写在与旧版逐字节一致的 `token` / `qqToken` 键里，请求头也照旧；
+ *   - 网易云 / QQ 保留旧版 `token` / `qqToken` 键，酷狗 / 酷我使用独立的 `kugouToken` / `kuwoToken`；
  *   - `mfu:accounts` 是新增的登记表，额外记住本机登录过的其它账号，支持一键切回。
  *
  * 因此这里不做任何数据合并：切换账号后看到的就是那个账号自己的歌单、收藏与记录。
